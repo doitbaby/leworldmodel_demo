@@ -25,6 +25,7 @@
 
 # Visual Studio cache directory
 .vs/
+.superpowers/
 
 # Gradle cache directory
 .gradle/
@@ -63,6 +64,12 @@ sysinfo.txt
 
 # Crashlytics generated file
 crashlytics-build.properties
+
+# Demo training artifacts
+.venv_mla/
+results/
+__pycache__/
+*.py[cod]
 
 # Packed Addressables
 /[Aa]ssets/[Aa]ddressable[Aa]ssets[Dd]ata/*/*.bin*

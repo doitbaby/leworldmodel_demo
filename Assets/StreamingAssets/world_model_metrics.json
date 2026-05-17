@@ -1,0 +1,1 @@
+{"schema": "rogue.metrics.v1", "source": "synthetic_game", "transitionCount": 24000, "epochs": 60, "dynamicsLoss": 0.008624482216934364, "rewardLoss": 0.004553678136629363, "valLoss": 0.04505390703678131, "successRate": 0.4030416666666667}

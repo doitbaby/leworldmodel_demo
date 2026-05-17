@@ -5,6 +5,8 @@ public class PlayerController : MonoBehaviour
 {
     private BoardManager m_Board;
     public Vector2Int CellPosition { get; set; }
+    public bool IsMoving => m_IsMoving;
+    public bool EnableHumanInput = true;
 
     public InputAction MoveAction;
     public InputAction StartNewGameAction;
@@ -33,7 +35,7 @@ public class PlayerController : MonoBehaviour
     {
         if (GameManager.Instance.IsGameOver)
         {
-            if (StartNewGameAction.triggered)
+            if (EnableHumanInput && StartNewGameAction.triggered)
             {
                 GameManager.Instance.StartNewGame();
             }
@@ -46,43 +48,15 @@ public class PlayerController : MonoBehaviour
 
             if (transform.position == m_MoveTarget)
             {
-                m_IsMoving = false;
-                m_Animator.SetBool(Animator_Moving, false);
-                var cellData = m_Board.GetCellData(CellPosition);
-                if (cellData.ContainedObject != null)
-                    cellData.ContainedObject.PlayerEntered();
+                CompleteMove();
             }
             return;
         }
 
-        if (MoveAction.triggered)
+        if (EnableHumanInput && MoveAction.triggered)
         {
-            var newCellTarget = CellPosition;
             Vector2 move = MoveAction.ReadValue<Vector2>();
-            Debug.Log(move);
-            //Vector2 position = (Vector2)transform.position + move * 0.1f;
-            //transform.position = position;
-            newCellTarget.x += (int)move.x;
-            newCellTarget.y += (int)move.y;
-
-            //check if the new position is passable, then move there if it is.
-            var cellData = m_Board.GetCellData(newCellTarget);
-            if (cellData != null && cellData.Passable)
-            {
-                GameManager.Instance.TickManager.Tick();
-                if (cellData.ContainedObject == null)
-                {
-                    MoveTo(newCellTarget);
-                }
-                else
-                {
-                    var canEnter = cellData.ContainedObject.PlayerWantsToEnter();
-                    if (canEnter)
-                        MoveTo(newCellTarget);
-                    else
-                        Attack();
-                }
-            }
+            TryStep(Vector2Int.RoundToInt(move));
         }
     }
 
@@ -118,11 +92,85 @@ public class PlayerController : MonoBehaviour
             transform.position = m_Board.CellToWorld(CellPosition);
         }
 
-        m_Animator.SetBool(Animator_Moving, m_IsMoving);
+        if (m_Animator != null)
+        {
+            m_Animator.SetBool(Animator_Moving, m_IsMoving);
+        }
+
+        if (!smoothMovement)
+        {
+            CompleteMove();
+        }
+    }
+
+    public bool TryStep(Vector2Int direction, bool smoothMovement = true)
+    {
+        if (m_Board == null || m_IsMoving || GameManager.Instance.IsGameOver)
+        {
+            return false;
+        }
+
+        direction.x = Mathf.Clamp(direction.x, -1, 1);
+        direction.y = Mathf.Clamp(direction.y, -1, 1);
+
+        if (Mathf.Abs(direction.x) + Mathf.Abs(direction.y) != 1)
+        {
+            return false;
+        }
+
+        var newCellTarget = CellPosition + direction;
+        var cellData = m_Board.GetCellData(newCellTarget);
+        if (cellData == null || !cellData.Passable)
+        {
+            return false;
+        }
+
+        GameManager.Instance.TickManager.Tick();
+        if (GameManager.Instance.IsGameOver)
+        {
+            return true;
+        }
+
+        if (cellData.ContainedObject == null)
+        {
+            MoveTo(newCellTarget, smoothMovement);
+            return true;
+        }
+
+        var canEnter = cellData.ContainedObject.PlayerWantsToEnter();
+        if (canEnter)
+        {
+            MoveTo(newCellTarget, smoothMovement);
+        }
+        else
+        {
+            Attack();
+        }
+
+        return true;
     }
 
     public void Attack()
     {
-        m_Animator.SetTrigger(Animator_Attack);
+        if (m_Animator != null)
+        {
+            m_Animator.SetTrigger(Animator_Attack);
+        }
+    }
+
+    private void CompleteMove()
+    {
+        m_IsMoving = false;
+
+        if (m_Animator != null)
+        {
+            m_Animator.SetBool(Animator_Moving, false);
+        }
+
+        var cellData = m_Board.GetCellData(CellPosition);
+        if (cellData != null && cellData.ContainedObject != null)
+        {
+            cellData.ContainedObject.PlayerEntered();
+        }
     }
 }

@@ -29,6 +29,7 @@ public class BoardManager : MonoBehaviour
 
     public int MinEnemyCount = 1;
     public int MaxEnemyCount = 2;
+    public Vector2Int ExitCell => new Vector2Int(Width - 2, Height - 2);
 
     public void Init()
     {
@@ -64,7 +65,7 @@ public class BoardManager : MonoBehaviour
         var playerStartingPosition = new Vector2Int(1, 1);
         m_EmptyCellsList.Remove(playerStartingPosition);
 
-        Vector2Int endCoord = new Vector2Int(Width - 2, Height - 2);
+        Vector2Int endCoord = ExitCell;
         AddObject(Instantiate(ExitCellPrefab), endCoord);
         m_EmptyCellsList.Remove(endCoord);
 
@@ -101,10 +102,77 @@ public class BoardManager : MonoBehaviour
 
     public CellData GetCellData(Vector2Int cellIndex)
     {
-        if (cellIndex.x < 0 || cellIndex.x >= Width
+        if (m_BoardData == null
+            || cellIndex.x < 0 || cellIndex.x >= Width
             || cellIndex.y < 0 || cellIndex.y >= Height)
             return null;
         return m_BoardData[cellIndex.x, cellIndex.y];
+    }
+
+    public int GetCellObjectCode(Vector2Int cellIndex)
+    {
+        var data = GetCellData(cellIndex);
+        if (data == null || !data.Passable)
+        {
+            return -1;
+        }
+
+        if (data.ContainedObject == null)
+        {
+            return 0;
+        }
+
+        if (data.ContainedObject is ExitCellObject)
+        {
+            return 1;
+        }
+
+        if (data.ContainedObject is EnemyCellObject)
+        {
+            return 2;
+        }
+
+        if (data.ContainedObject is ObstacleCellObject)
+        {
+            return 3;
+        }
+
+        if (data.ContainedObject is FoodCellObject)
+        {
+            return 4;
+        }
+
+        return 5;
+    }
+
+    public bool TryFindNearestEnemy(Vector2Int origin, out Vector2Int enemyCell, out int distance)
+    {
+        enemyCell = Vector2Int.zero;
+        distance = int.MaxValue;
+
+        if (m_BoardData == null)
+        {
+            return false;
+        }
+
+        for (int y = 0; y < Height; ++y)
+        {
+            for (int x = 0; x < Width; ++x)
+            {
+                var data = m_BoardData[x, y];
+                if (data.ContainedObject is EnemyCellObject)
+                {
+                    int candidateDistance = Mathf.Abs(origin.x - x) + Mathf.Abs(origin.y - y);
+                    if (candidateDistance < distance)
+                    {
+                        distance = candidateDistance;
+                        enemyCell = new Vector2Int(x, y);
+                    }
+                }
+            }
+        }
+
+        return distance != int.MaxValue;
     }
 
     void GenerateFood()
