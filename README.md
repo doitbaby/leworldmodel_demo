@@ -315,6 +315,21 @@ idea: the agent chooses actions by comparing predicted futures.
 - Add model-vs-heuristic ablation charts.
 - Add automatic retraining scripts that consume the latest planner trajectories.
 
+## Devin And Agent Skills
+
+This repo includes a Devin-ready skill pack at:
+
+```text
+.agents/skills/
+```
+
+Start with `@skills:codebase-research`, then move through
+`@skills:architecture-plan`, `@skills:implementation-agent`,
+`@skills:test-and-verify`, and `@skills:pr-finalization` for larger tasks.
+
+See `docs/devin/skills-setup.md` and `AGENTS.md` for the full workflow,
+repo-specific prompts, Unity verification notes, and safe operating rules.
+
 ## Credits
 
 This project builds on the original open-source `2DRogueTest` Unity roguelike
