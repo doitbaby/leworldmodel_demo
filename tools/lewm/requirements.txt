@@ -1,3 +1,8 @@
 torch>=2.1
 einops>=0.7
 numpy>=1.24
+
+# Inference sidecar (M3+). FastAPI's TestClient also requires httpx.
+fastapi>=0.110
+uvicorn[standard]>=0.27
+httpx>=0.27
