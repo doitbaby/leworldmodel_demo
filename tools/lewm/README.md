@@ -15,8 +15,8 @@ this README is the day-to-day usage guide.
 | --- | --- | --- |
 | M0 — research / port analysis | #1 | landed (see `docs/research/lewm-port-analysis.md`). |
 | M1 — vendor modules + smoke training | #1 | landed. |
-| M2 — Unity pixel observation builder + JSONL v3 | this PR | landed. |
-| M3 — Python inference sidecar | TBD | not started. |
+| M2 — Unity pixel observation builder + JSONL v3 | #2 | landed. |
+| M3 — Python inference sidecar | this PR | landed (sidecar + CLI + Unity client). |
 | M4 — full training pipeline + checkpoints | TBD | not started. |
 | M5 — Dreamer-style actor on imagined rollouts | TBD | not started. |
 | M6 — benchmark harness | TBD | not started. |
@@ -32,8 +32,11 @@ tools/lewm/
 ├── jepa.py       # JEPA wrapper with reward / done heads
 ├── data.py       # synthetic + v2/v3 JSONL datasets (vector + board-pixel)
 ├── train.py      # PyTorch-only training entry point
+├── sidecar.py    # FastAPI app wrapping JEPA inference (M3)
+├── serve.py      # CLI: load checkpoint and boot uvicorn (M3)
 ├── tests/
-│   └── test_board_jsonl.py   # round-trip check for the v3 board JSONL path
+│   ├── test_board_jsonl.py   # round-trip check for the v3 board JSONL path
+│   └── test_sidecar.py       # in-process TestClient integration for the sidecar
 ├── requirements.txt
 └── README.md     # you are here
 ```
@@ -154,20 +157,56 @@ MLP trainer.
 | `--done-loss-weight` | termination BCE weight | 0.5 → 2.0 |
 | `--items-per-epoch` | synthetic episodes per epoch | 32 (smoke) → 2048 |
 
+## Inference sidecar (M3)
+
+Unity cannot run PyTorch / JEPA in-engine. M3 adds a thin Python sidecar
+that wraps a trained checkpoint behind three HTTP endpoints:
+
+```
+GET  /healthz          → { "status": "ok" | "no_model", "service": ... }
+GET  /info             → { embed_dim, action_dim, image_size, sequence_length, service }
+POST /score_actions    → { scores: [float, ...], horizon, service }
+```
+
+Boot it like this once `python -m tools.lewm.train` has produced a
+checkpoint:
+
+```bash
+python -m tools.lewm.serve \
+    --checkpoint results/lewm/checkpoint.pt \
+    --host 127.0.0.1 --port 5555
+```
+
+The Unity side talks to the sidecar via
+[`Assets/Scripts/ML/LewmClient.cs`](../../Assets/Scripts/ML/LewmClient.cs)
+— a small `MonoBehaviour` wrapping `UnityWebRequest`. M3 only lands the
+wire (`LewmClient` is **not yet** referenced by `BrainPlanner` /
+`WorldModelPlannerAgent`); M5 plugs it into the live decision loop with
+a graceful fallback to the existing mission heuristic + LeWM-lite path
+when the sidecar is unreachable.
+
+The flat action layout (`action_sequences_flat = num_sequences ×
+horizon` row-major ints) is a JsonUtility compatibility quirk: Unity's
+JsonUtility does not handle nested arrays. The sidecar reshapes
+internally before calling `JEPA.score_action_sequences`.
+
 ## Verification
 
-Two cheap checks cover the LeWM port end-to-end without GPU or Unity:
+Three cheap checks cover the LeWM port end-to-end without GPU or Unity:
 
 ```bash
 python -m tools.lewm.train --smoke              # synthetic smoke training
 python -m tools.lewm.tests.test_board_jsonl     # v3 JSONL round-trip
+python -m tools.lewm.tests.test_sidecar         # FastAPI sidecar integration
 ```
 
 The smoke train exercises encoder, Embedder, ARPredictor, RewardHead,
 DoneHead, SIGReg, optimiser, checkpoint save. The round-trip test confirms
 that the JSONL written by `RogueTransitionRecorder.cs` (schema v3) can be
 read back and rendered into the exact `(T, 3, H, W)` pixel tensors the
-training loop expects.
+training loop expects. The sidecar test trains a tiny checkpoint, loads
+it via `load_checkpoint`, then drives `/healthz`, `/info`, and
+`/score_actions` through Starlette's `TestClient`.
 
 The existing `tools/world_model/train_world_model.py` MLP path is untouched
 and continues to support the live Unity demo.
