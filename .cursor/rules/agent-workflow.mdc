@@ -1,0 +1,19 @@
+---
+description: Repo-wide AI agent workflow, safety rules, and verification expectations.
+alwaysApply: true
+---
+
+# Agent Workflow
+
+Read `AGENTS.md` first and treat it as the canonical project guide.
+
+For larger work:
+
+1. Research relevant files.
+2. Produce a concise plan.
+3. Implement a focused slice.
+4. Run verification.
+5. Update docs when behavior or setup changes.
+
+Use `.agents/skills/` as the reusable workflow library. Do not touch Unity cache
+folders or generated artifacts unless the task specifically asks for them.

@@ -25,10 +25,17 @@ procedures instead of rediscovering them from scratch.
   codebase-research/
   docs-sync/
   implementation-agent/
+  backend-engineer/
+  database-migrations/
+  devops-release/
+  frontend-engineer/
+  fullstack-architect/
+  performance-review/
   pr-finalization/
   security-review/
   systematic-debugging/
   test-and-verify/
+  test-driven-development/
   unity-ml-agents/
 ```
 
@@ -37,7 +44,14 @@ Use these as composable work modes:
 - `codebase-research`: read-only investigation with exact file references.
 - `architecture-plan`: turn a feature request into a scoped plan.
 - `implementation-agent`: make focused edits while preserving user changes.
+- `fullstack-architect`: design cross-layer features and contracts.
+- `frontend-engineer`: implement accessible UI, states, and browser behavior.
+- `backend-engineer`: implement APIs, validation, authz, and domain logic.
+- `database-migrations`: plan schema/data changes with rollback thinking.
+- `devops-release`: handle CI, env config, rollout, and rollback.
+- `performance-review`: measure and improve slow or resource-heavy behavior.
 - `systematic-debugging`: reproduce, isolate root cause, patch, verify.
+- `test-driven-development`: capture risky behavior with a failing test first.
 - `test-and-verify`: choose and run the right build/test checks.
 - `code-review`: findings-first review for bugs and regressions.
 - `security-review`: check secrets, injection, dangerous scripts, and auth risk.

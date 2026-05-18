@@ -330,6 +330,23 @@ Start with `@skills:codebase-research`, then move through
 See `docs/devin/skills-setup.md` and `AGENTS.md` for the full workflow,
 repo-specific prompts, Unity verification notes, and safe operating rules.
 
+The broader reusable agent kit also includes:
+
+```text
+docs/agent/
+.github/copilot-instructions.md
+.cursor/rules/
+CLAUDE.md
+scripts/validate-agent-kit.ps1
+scripts/install-agent-kit.ps1
+```
+
+Validate the kit with:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/validate-agent-kit.ps1
+```
+
 ## Credits
 
 This project builds on the original open-source `2DRogueTest` Unity roguelike

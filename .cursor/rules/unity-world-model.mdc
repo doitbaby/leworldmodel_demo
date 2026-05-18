@@ -1,0 +1,23 @@
+---
+description: Unity LeWorldModel-lite project conventions.
+globs:
+  - "Assets/**/*.cs"
+  - "Assets/**/*.uxml"
+  - "tools/world_model/**/*.py"
+alwaysApply: false
+---
+
+# Unity World Model Rules
+
+Main demo scene: `Assets/Scenes/WorldModelPlannerRoom.unity`.
+
+Core AI files live in `Assets/Scripts/ML/`. Keep the demo stable: AI toggle,
+Brain HUD, action ranking, imagined futures, and metrics should remain visible
+after AI changes.
+
+For Python world-model changes, run:
+
+```powershell
+python -m py_compile tools/world_model/train_world_model.py
+python tools/world_model/train_world_model.py --smoke --epochs 2
+```

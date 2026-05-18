@@ -10,13 +10,14 @@ Use the skills in `.agents/skills` when they match the task.
 Recommended task flow:
 
 1. `codebase-research` - understand the relevant files and behavior.
-2. `architecture-plan` - produce a small implementation plan for non-trivial work.
+2. `architecture-plan` or `fullstack-architect` - produce a small plan.
 3. `implementation-agent` - make focused code changes.
 4. `systematic-debugging` - use when behavior is broken or intermittent.
-5. `test-and-verify` - run the smallest meaningful verification.
-6. `code-review` - review risky changes before finalizing.
-7. `docs-sync` - update README or runbooks when behavior or setup changes.
-8. `pr-finalization` - prepare commit or pull request notes.
+5. `test-driven-development` - use when a failing test can define the change.
+6. `test-and-verify` - run the smallest meaningful verification.
+7. `code-review` and `security-review` - review risky changes before finalizing.
+8. `docs-sync` - update README or runbooks when behavior or setup changes.
+9. `pr-finalization` - prepare commit or pull request notes.
 
 Do not skip investigation for Unity scene, asset, or generated-file behavior.
 
@@ -61,6 +62,8 @@ The demo should show LeWorldModel-lite:
 - Use focused edits. Avoid unrelated refactors.
 - Do not rewrite scene files unless necessary for the task.
 - Prefer code and UXML changes over fragile manual scene edits when possible.
+- For reusable workflow improvements, update `.agents/skills`, `docs/agent`,
+  and tool adapters together.
 
 ## Unity Verification
 
@@ -108,6 +111,19 @@ Implement a finite benchmark mode for 10 levels, then update docs.
 Use @skills:code-review.
 Review the latest diff for Unity runtime bugs, generated-file churn, and missing tests.
 ```
+
+## Portable Agent Kit
+
+This repo includes a reusable agent engineering kit:
+
+- `.agents/skills/` - portable skills for Devin and compatible agents.
+- `docs/agent/` - task packets, workflow playbook, quality gates, MCP policy,
+  and prompt library.
+- `.github/copilot-instructions.md` - GitHub Copilot adapter.
+- `.cursor/rules/` - Cursor adapter.
+- `CLAUDE.md` - Claude Code adapter.
+- `scripts/validate-agent-kit.ps1` - validates skill frontmatter and required docs.
+- `scripts/install-agent-kit.ps1` - copies the kit into another repository.
 
 ## Final Response Standard
 
