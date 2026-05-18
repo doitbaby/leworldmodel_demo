@@ -67,9 +67,12 @@ crashlytics-build.properties
 
 # Demo training artifacts
 .venv_mla/
+.venv_lewm/
+.venv/
 results/
 __pycache__/
 *.py[cod]
+*.egg-info/
 
 # Packed Addressables
 /[Aa]ssets/[Aa]ddressable[Aa]ssets[Dd]ata/*/*.bin*
