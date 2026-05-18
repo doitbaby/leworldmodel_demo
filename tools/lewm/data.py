@@ -1,14 +1,22 @@
 """Dataset adapters for training :class:`tools.lewm.jepa.JEPA`.
 
-Two data sources are supported:
+Three data sources are supported:
 
 1. :class:`SyntheticRogueDataset` -- generates fake rogue-style episodes on
-   the fly (8x8 board, 32x32x3 pixel renders). Used by M1's smoke training
-   when the Unity pixel pipeline (M2) is not yet in place.
+   the fly (8x8 board, 32x32x3 pixel renders). Used for CPU-friendly smoke
+   training when no Unity gameplay logs are available.
 
-2. :class:`VectorJsonlDataset` -- reads the existing v2 transition JSONL
-   files emitted by ``RogueTransitionRecorder.cs`` (vector observations
-   only). Lets the new training loop reuse the data the demo already has.
+2. :class:`VectorJsonlDataset` -- reads the v2/v3 transition JSONL files
+   emitted by ``RogueTransitionRecorder.cs``, using the 31-d vector
+   observation fields. Lets the existing MLP/LeWM-lite demo and the JEPA
+   port share data.
+
+3. :class:`BoardJsonlDataset` -- reads the v3 transition JSONL files,
+   using the new ``board_state``/``next_board_state`` cell-code grids
+   (see ``Assets/Scripts/ML/PixelObservationBuilder.cs``). Each transition
+   is rendered to pixels on the fly via :func:`render_board_to_pixels` so
+   the JEPA pipeline can train on real Unity gameplay with deterministic,
+   noise-free pixel observations.
 """
 
 from __future__ import annotations
@@ -28,6 +36,7 @@ __all__ = [
     "render_board_to_pixels",
     "SyntheticRogueDataset",
     "VectorJsonlDataset",
+    "BoardJsonlDataset",
     "SequenceCollator",
 ]
 
@@ -316,6 +325,125 @@ class VectorJsonlDataset(Dataset):
 
         return {
             "obs": torch.from_numpy(np.stack(obs)).float(),
+            "action": torch.from_numpy(np.stack(actions)).float(),
+            "reward": torch.tensor(rewards, dtype=torch.float32),
+            "done": torch.tensor(dones, dtype=torch.float32),
+        }
+
+
+class BoardJsonlDataset(Dataset):
+    """Read v3 transition JSONL into pixel-observation windows.
+
+    Expects each line to expose at least::
+
+        {
+            "schema": "rogue.transition.v3",
+            "episode": int,
+            "step": int,
+            "action": int,
+            "reward": float,
+            "done": bool,
+            "board_width": int,
+            "board_height": int,
+            "board_state": [int, ...],        # length board_width * board_height
+            "next_board_state": [int, ...],   # same shape
+        }
+
+    Cell codes follow the convention in
+    ``Assets/Scripts/ML/PixelObservationBuilder.cs`` (and
+    :data:`ROGUE_CELL_COLORS`):
+    ``-1`` wall, ``0`` empty, ``1`` exit, ``2`` enemy, ``3`` obstacle,
+    ``4`` food, ``5`` player.
+
+    Each item returned is a window of ``sequence_length`` consecutive
+    transitions from the same episode. ``pixels`` has shape
+    ``(T, 3, image_size, image_size)`` (rendered on the fly via
+    :func:`render_board_to_pixels`); ``action``/``reward``/``done`` cover
+    the ``T - 1`` transitions inside the window.
+    """
+
+    def __init__(
+        self,
+        path: str | Path,
+        sequence_length: int = 5,
+        image_size: int = 32,
+        action_dim: int = 4,
+    ):
+        if sequence_length < 2:
+            raise ValueError("sequence_length must be >= 2")
+        self.path = Path(path)
+        self.sequence_length = sequence_length
+        self.image_size = image_size
+        self.action_dim = action_dim
+        self._windows: list[tuple[int, int]] = []
+
+        episodes: dict[int, list[dict]] = {}
+        with self.path.open() as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if "board_state" not in rec or "next_board_state" not in rec:
+                    # v2 records or malformed v3
+                    continue
+                ep = int(rec.get("episode", 0))
+                episodes.setdefault(ep, []).append(rec)
+
+        self._episodes: list[list[dict]] = []
+        for ep in sorted(episodes):
+            steps = sorted(episodes[ep], key=lambda r: int(r.get("step", 0)))
+            if len(steps) < sequence_length:
+                continue
+            ep_idx = len(self._episodes)
+            self._episodes.append(steps)
+            for start in range(len(steps) - sequence_length + 1):
+                self._windows.append((ep_idx, start))
+
+    def __len__(self) -> int:
+        return len(self._windows)
+
+    @staticmethod
+    def _to_board(rec: dict, key: str) -> np.ndarray:
+        w = int(rec.get("board_width", 0))
+        h = int(rec.get("board_height", 0))
+        if w <= 0 or h <= 0:
+            raise ValueError(f"missing board_width/board_height on record {rec.get('step')}")
+        flat = rec.get(key, [])
+        if len(flat) != w * h:
+            raise ValueError(
+                f"{key} length {len(flat)} != board_width({w}) * board_height({h})"
+            )
+        return np.asarray(flat, dtype=np.int32).reshape(h, w)
+
+    def _render(self, rec: dict, key: str) -> np.ndarray:
+        return render_board_to_pixels(self._to_board(rec, key), self.image_size)
+
+    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
+        ep_idx, start = self._windows[idx]
+        steps = self._episodes[ep_idx]
+        window = steps[start : start + self.sequence_length]
+
+        pixels = [self._render(window[0], "board_state")]
+        actions: list[np.ndarray] = []
+        rewards: list[float] = []
+        dones: list[float] = []
+
+        for rec in window[:-1]:
+            pixels.append(self._render(rec, "next_board_state"))
+            act_idx = int(rec.get("action", 0))
+            one_hot = np.zeros(self.action_dim, dtype=np.float32)
+            if 0 <= act_idx < self.action_dim:
+                one_hot[act_idx] = 1.0
+            actions.append(one_hot)
+            rewards.append(float(rec.get("reward", 0.0)))
+            dones.append(float(rec.get("done", False)))
+
+        return {
+            "pixels": torch.from_numpy(np.stack(pixels)).float(),
             "action": torch.from_numpy(np.stack(actions)).float(),
             "reward": torch.tensor(rewards, dtype=torch.float32),
             "done": torch.tensor(dones, dtype=torch.float32),

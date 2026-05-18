@@ -13,9 +13,9 @@ this README is the day-to-day usage guide.
 
 | Milestone | PR | Status |
 | --- | --- | --- |
-| M0 — research / port analysis | this PR | landed (see `docs/research/lewm-port-analysis.md`). |
-| M1 — vendor modules + smoke training | this PR | landed. |
-| M2 — Unity pixel observation builder | TBD | not started. |
+| M0 — research / port analysis | #1 | landed (see `docs/research/lewm-port-analysis.md`). |
+| M1 — vendor modules + smoke training | #1 | landed. |
+| M2 — Unity pixel observation builder + JSONL v3 | this PR | landed. |
 | M3 — Python inference sidecar | TBD | not started. |
 | M4 — full training pipeline + checkpoints | TBD | not started. |
 | M5 — Dreamer-style actor on imagined rollouts | TBD | not started. |
@@ -30,8 +30,10 @@ tools/lewm/
 ├── module.py     # vendored upstream layers (SIGReg, ARPredictor, ...)
 ├── encoder.py    # TinyConvEncoder for 32x32 board + VectorEncoder for 31-d obs
 ├── jepa.py       # JEPA wrapper with reward / done heads
-├── data.py       # synthetic rogue dataset + v2 JSONL adapter
+├── data.py       # synthetic + v2/v3 JSONL datasets (vector + board-pixel)
 ├── train.py      # PyTorch-only training entry point
+├── tests/
+│   └── test_board_jsonl.py   # round-trip check for the v3 board JSONL path
 ├── requirements.txt
 └── README.md     # you are here
 ```
@@ -71,8 +73,8 @@ ignored by `.gitignore`).
 
 ## Vector-mode training (existing JSONL transitions)
 
-The existing `RogueTransitionRecorder` writes v2 vector transitions. M1 can
-train the JEPA over those files via `VectorEncoder`:
+The existing `RogueTransitionRecorder` writes vector transitions. The JEPA can
+be trained over those files via `VectorEncoder`, regardless of schema version:
 
 ```bash
 python -m tools.lewm.train \
@@ -82,8 +84,42 @@ python -m tools.lewm.train \
     --batch-size 64
 ```
 
-Vector mode is a pre-pixel-pipeline stop-gap useful for iterating on the
-LeWM losses without M2 in place.
+Vector mode is a useful sanity check while iterating on the LeWM losses.
+
+## Pixel-mode training from Unity gameplay (v3 board JSONL)
+
+From M2 onward, `RogueTransitionRecorder` emits schema `rogue.transition.v3`
+with the new `board_state` / `next_board_state` integer arrays produced by
+`Assets/Scripts/ML/PixelObservationBuilder.cs`. The Python side renders these
+to a deterministic RGB tile image on the fly, so JEPA training can use real
+Unity gameplay data without ever capturing a `RenderTexture`:
+
+```bash
+python -m tools.lewm.train \
+    --observation-mode board-jsonl \
+    --jsonl-path "$HOME/.config/unity3d/.../rogue_transitions.jsonl" \
+    --epochs 5 \
+    --batch-size 64
+```
+
+Cell-code conventions (must match `PixelObservationBuilder.cs`):
+
+| Code | Meaning | Colour (`ROGUE_CELL_COLORS`) |
+| --- | --- | --- |
+| `-1` | wall | dark grey |
+| `0` | empty passable | near-white |
+| `1` | exit | green |
+| `2` | enemy | red |
+| `3` | obstacle | brown |
+| `4` | food | yellow |
+| `5` | player (overlaid) | blue |
+
+To sanity-check the v3 schema without Unity:
+
+```bash
+python -m tools.lewm.tests.test_board_jsonl
+# OK: BoardJsonlDataset round-trip passed.
+```
 
 ## Architecture summary
 
@@ -120,14 +156,18 @@ MLP trainer.
 
 ## Verification
 
-The smallest meaningful check is the smoke run shown above; it exercises:
+Two cheap checks cover the LeWM port end-to-end without GPU or Unity:
 
-- Encoder forward (`TinyConvEncoder`)
-- `Embedder` action embedding
-- `ARPredictor` autoregressive predictor
-- Reward + done heads
-- `SIGReg` regulariser
-- Optimiser step + checkpoint save
+```bash
+python -m tools.lewm.train --smoke              # synthetic smoke training
+python -m tools.lewm.tests.test_board_jsonl     # v3 JSONL round-trip
+```
+
+The smoke train exercises encoder, Embedder, ARPredictor, RewardHead,
+DoneHead, SIGReg, optimiser, checkpoint save. The round-trip test confirms
+that the JSONL written by `RogueTransitionRecorder.cs` (schema v3) can be
+read back and rendered into the exact `(T, 3, H, W)` pixel tensors the
+training loop expects.
 
 The existing `tools/world_model/train_world_model.py` MLP path is untouched
 and continues to support the live Unity demo.
