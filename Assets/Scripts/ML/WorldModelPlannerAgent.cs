@@ -97,6 +97,9 @@ public class WorldModelPlannerAgent : MonoBehaviour
         int previousLevel = Game.CurrentLevel;
         int previousFood = Game.CurrentFoodAmount;
         int previousDistance = Game.DistanceToExit(Game.PlayerCellPosition);
+        int previousBoardWidth = PixelObservationBuilder.GetBoardWidth(Game);
+        int previousBoardHeight = PixelObservationBuilder.GetBoardHeight(Game);
+        int[] previousBoardState = PixelObservationBuilder.BuildCellCodes(Game);
         bool accepted = Game.PlayerController.TryStep(RogueObservationBuilder.ActionToDirection(action), smoothMovement: !InstantActions);
 
         if (RecordPlannerTransitions && TransitionRecorder != null)
@@ -109,6 +112,9 @@ public class WorldModelPlannerAgent : MonoBehaviour
                 previousLevel = previousLevel,
                 previousFood = previousFood,
                 previousDistance = previousDistance,
+                previousBoardWidth = previousBoardWidth,
+                previousBoardHeight = previousBoardHeight,
+                previousBoardState = previousBoardState,
             };
 
             if (!accepted || InstantActions)
@@ -368,7 +374,11 @@ public class WorldModelPlannerAgent : MonoBehaviour
             done,
             Game.CurrentLevel,
             Game.CurrentFoodAmount,
-            outcome);
+            outcome,
+            m_PendingTransition.previousBoardWidth,
+            m_PendingTransition.previousBoardHeight,
+            m_PendingTransition.previousBoardState,
+            PixelObservationBuilder.BuildCellCodes(Game));
         m_PendingTransition = null;
     }
 
@@ -380,5 +390,8 @@ public class WorldModelPlannerAgent : MonoBehaviour
         public int previousLevel;
         public int previousFood;
         public int previousDistance;
+        public int previousBoardWidth;
+        public int previousBoardHeight;
+        public int[] previousBoardState;
     }
 }

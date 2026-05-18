@@ -206,8 +206,8 @@ Each milestone is a single PR. Quality gates per milestone:
 
 | # | PR title | Scope |
 | -- | --- | --- |
-| **M1** | `LeWM port — vendor upstream modules + scaffold` | Vendor `module.py`, adapt `jepa.py`, add `TinyConvEncoder`, synthetic dataset + smoke training script. No Unity changes. |
-| M2 | `LeWM port — Unity pixel observations` | `PixelObservationBuilder.cs`, JSONL v3 schema with `pixels` field, update `RogueTransitionRecorder`. |
+| ~~M1~~ | `LeWM port — vendor upstream modules + scaffold` | **landed (PR #1).** Vendor `module.py`, adapt `jepa.py`, add `TinyConvEncoder`, synthetic dataset + smoke training script. No Unity changes. |
+| ~~M2~~ | `LeWM port — Unity pixel observations + JSONL v3` | **landed (this PR).** New `PixelObservationBuilder.cs` emits a row-major cell-code grid; `RogueTransitionRecorder.cs` schema bumped to `rogue.transition.v3` with `board_state` / `next_board_state` / `board_width` / `board_height`; `WorldModelPlannerAgent.cs` captures pre/post-step board snapshots; new `BoardJsonlDataset` renders cell codes to RGB on the Python side. Vector observations preserved; v2 readers keep working. |
 | M3 | `LeWM port — Python inference sidecar` | FastAPI sidecar, `LewmClient.cs`, `WorldModelPlannerAgent` queries sidecar with fallback. |
 | M4 | `LeWM port — training pipeline + checkpoints` | JSONL→tensor pipeline, full LeWM loss, reward+done heads, checkpoint save/load consumed by sidecar. |
 | M5 | `LeWM port — Dreamer-style actor on imagined rollouts` | CEM-style discrete planner using reward+done heads; refactor `BrainPlanner` so model-first scoring becomes the primary path. |

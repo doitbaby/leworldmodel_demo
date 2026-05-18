@@ -33,6 +33,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from .data import (
+    BoardJsonlDataset,
     SequenceCollator,
     SyntheticRogueDataset,
     VectorJsonlDataset,
@@ -68,8 +69,11 @@ class TrainConfig:
     seed: int
 
 
+_PIXEL_MODES = {"pixel", "board-jsonl"}
+
+
 def build_model(cfg: TrainConfig) -> JEPA:
-    if cfg.observation_mode == "pixel":
+    if cfg.observation_mode in _PIXEL_MODES:
         encoder: torch.nn.Module = TinyConvEncoder(
             in_channels=3,
             image_size=cfg.image_size,
@@ -128,7 +132,7 @@ def build_model(cfg: TrainConfig) -> JEPA:
 
 
 def _obs_key(mode: str) -> str:
-    return "pixels" if mode == "pixel" else "obs"
+    return "pixels" if mode in _PIXEL_MODES else "obs"
 
 
 def build_dataloader(
@@ -149,6 +153,30 @@ def build_dataloader(
             dataset,
             batch_size=cfg.batch_size,
             num_workers=num_workers,
+            collate_fn=SequenceCollator(),
+        )
+        return loader, "pixels"
+
+    if cfg.observation_mode == "board-jsonl":
+        if not jsonl_path:
+            raise ValueError("board-jsonl mode requires --jsonl-path")
+        board_dataset = BoardJsonlDataset(
+            path=jsonl_path,
+            sequence_length=cfg.sequence_length,
+            image_size=cfg.image_size,
+            action_dim=cfg.action_dim,
+        )
+        if len(board_dataset) == 0:
+            raise RuntimeError(
+                f"no v3 board transitions found in {jsonl_path} "
+                "(missing board_state/next_board_state fields?)"
+            )
+        loader = DataLoader(
+            board_dataset,
+            batch_size=cfg.batch_size,
+            num_workers=num_workers,
+            shuffle=True,
+            drop_last=True,
             collate_fn=SequenceCollator(),
         )
         return loader, "pixels"
@@ -288,8 +316,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--done-loss-weight", type=float, default=1.0)
     p.add_argument(
         "--observation-mode",
-        choices=["pixel", "vector"],
+        choices=["pixel", "vector", "board-jsonl"],
         default="pixel",
+        help=(
+            "'pixel' = synthetic CNN smoke; 'vector' = v2/v3 JSONL with 31-d "
+            "obs; 'board-jsonl' = v3 JSONL with board_state cell codes."
+        ),
     )
     p.add_argument("--image-size", type=int, default=32)
     p.add_argument("--board-size", type=int, default=8)

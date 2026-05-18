@@ -5,7 +5,13 @@ using UnityEngine;
 
 public class RogueTransitionRecorder : MonoBehaviour
 {
-    private const string Schema = "rogue.transition.v2";
+    // v3 adds the board cell-code grid (boardState/nextBoardState +
+    // boardWidth/boardHeight) so the LeWorldModel port can render
+    // deterministic pixel observations on the Python side. The vector
+    // observation fields from v2 are preserved so the existing MLP demo
+    // and any v2 readers (e.g. tools/lewm/data.py::VectorJsonlDataset)
+    // keep working unchanged.
+    private const string Schema = "rogue.transition.v3";
 
     public bool RecordTransitions = true;
     public string OutputDirectoryName = "WorldModelDemo";
@@ -36,7 +42,11 @@ public class RogueTransitionRecorder : MonoBehaviour
         bool done,
         int level,
         int food,
-        string outcome)
+        string outcome,
+        int boardWidth,
+        int boardHeight,
+        int[] boardState,
+        int[] nextBoardState)
     {
         if (!RecordTransitions)
         {
@@ -60,6 +70,10 @@ public class RogueTransitionRecorder : MonoBehaviour
             outcome = outcome,
             level = level,
             food = food,
+            board_width = boardWidth,
+            board_height = boardHeight,
+            board_state = boardState,
+            next_board_state = nextBoardState,
         };
 
         File.AppendAllText(OutputPath, JsonUtility.ToJson(transition) + Environment.NewLine);
@@ -82,5 +96,9 @@ public class RogueTransitionRecorder : MonoBehaviour
         public string outcome;
         public int level;
         public int food;
+        public int board_width;
+        public int board_height;
+        public int[] board_state;
+        public int[] next_board_state;
     }
 }
