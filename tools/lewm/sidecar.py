@@ -112,7 +112,7 @@ def load_checkpoint(path: str, device: str = "cpu") -> None:
     """Load a checkpoint produced by ``tools.lewm.train.save_checkpoint``."""
     # Lazy import so ``import tools.lewm.sidecar`` is cheap and free of
     # circular-import risk during testing.
-    from .train import TrainConfig, build_model
+    from .train import build_model, load_config_from_payload
 
     payload = torch.load(path, map_location=device, weights_only=False)
     schema = payload.get("schema")
@@ -122,7 +122,9 @@ def load_checkpoint(path: str, device: str = "cpu") -> None:
             "expected 'lewm.port.checkpoint.v1'"
         )
 
-    cfg = TrainConfig(**payload["config"])
+    # ``load_config_from_payload`` filters unknown fields, so M1/M3
+    # checkpoints keep loading after M4 adds new TrainConfig fields.
+    cfg = load_config_from_payload(payload)
     model = build_model(cfg)
     model.load_state_dict(payload["model_state"])
     model.eval()
