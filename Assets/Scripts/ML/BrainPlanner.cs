@@ -16,6 +16,18 @@ public static class BrainPlanner
     private const float HeuristicRolloutWeight = 0.12f;
     private const float UnreachablePathCost = 9999f;
     private const int LowFoodThreshold = 30;
+    // M5: how much weight the safety bias gets when the sidecar plan is
+    // the primary scorer. Small enough that a strong model preference
+    // dominates, large enough that walking into an adjacent enemy still
+    // loses to a slightly weaker but safer alternative (enemy penalty
+    // = -6, so 0.5 * -6 = -3 of bias).
+    private const float SidecarSafetyWeight = 0.5f;
+    // M5: score reserved for actions that the sidecar's top-k did not
+    // sample. We do not want them to compete with the model's choices
+    // unless the model failed to differentiate. The map heuristic still
+    // tells us if the action is reachable; we just bias it well below
+    // any plan that actually got scored.
+    private const float UnconsideredActionBase = -50f;
 
     public static BrainHUDData Decide(
         GameManager game,
@@ -89,6 +101,158 @@ public static class BrainPlanner
             actionRanking = orderedRankings,
             imaginedFutures = futures
                 .OrderByDescending(future => future.score)
+                .Take(3)
+                .ToArray(),
+            metrics = metrics ?? BrainMetrics.Empty(),
+        };
+    }
+
+    /// <summary>
+    /// M5 — model-first action selection driven by a sidecar plan
+    /// (random-shooting JEPA rollouts).
+    ///
+    /// Unlike <see cref="Decide"/>, the mission heuristic no longer
+    /// dominates the score. The sidecar's best plan is the primary
+    /// scorer, the first-step safety bias is a small soft constraint
+    /// (e.g. avoid walking adjacent into an enemy when an equally good
+    /// alternative exists), and the map heuristic is used purely to
+    /// hard-reject blocked / out-of-bounds actions.
+    ///
+    /// Caller must have already confirmed the sidecar is online and
+    /// supplied a valid <paramref name="plan"/>. If the plan is empty or
+    /// nothing the model proposed is reachable, falls back to the
+    /// mission planner via <see cref="Decide"/>.
+    /// </summary>
+    public static BrainHUDData DecideWithSidecarPlan(
+        GameManager game,
+        SidecarPlanSummary plan,
+        BrainMetrics metrics,
+        bool aiEnabled)
+    {
+        if (plan == null
+            || plan.BestActions == null
+            || plan.BestActions.Length == 0
+            || plan.TopKActions == null
+            || plan.TopKActions.Length == 0)
+        {
+            // No usable plan; defer to the mission-heuristic path so the
+            // HUD still has something to display.
+            return Decide(game, null, metrics, 3, 0.85f, 0f, aiEnabled);
+        }
+
+        var rankings = new BrainActionScore[RogueObservationBuilder.ActionCount];
+        var futures = new List<BrainFuture>(plan.TopKActions.Length);
+
+        // For each cardinal action find the best plan score among the
+        // top-k that starts with it. We do NOT re-query the sidecar per
+        // action: random-shooting top-k naturally covers a spread of
+        // first steps, and one HTTP call per decision is the right
+        // budget at the 0.45s decision interval.
+        var actionToScore = new Dictionary<int, float>();
+        var actionToReason = new Dictionary<int, string>();
+        for (int k = 0; k < plan.TopKActions.Length; k++)
+        {
+            var seq = plan.TopKActions[k];
+            if (seq == null || seq.Length == 0)
+            {
+                continue;
+            }
+            int firstAction = seq[0];
+            float candidate = plan.TopKScores != null && k < plan.TopKScores.Length
+                ? plan.TopKScores[k]
+                : float.NegativeInfinity;
+            if (!actionToScore.TryGetValue(firstAction, out float existing) || candidate > existing)
+            {
+                actionToScore[firstAction] = candidate;
+                actionToReason[firstAction] = k == 0
+                    ? $"world-model best plan (score {candidate:0.00})"
+                    : $"world-model alt plan top-{k + 1} (score {candidate:0.00})";
+            }
+        }
+
+        for (int action = 0; action < RogueObservationBuilder.ActionCount; action++)
+        {
+            float mapScore = MapHeuristicScore(game, action);
+            bool blocked = IsInvalidScore(mapScore);
+            float modelScore;
+            string reason;
+            if (blocked)
+            {
+                modelScore = InvalidScore;
+                reason = "blocked or unsafe";
+            }
+            else if (actionToScore.TryGetValue(action, out float plannedScore))
+            {
+                modelScore = plannedScore;
+                reason = actionToReason[action];
+            }
+            else
+            {
+                // Action did not show up in the top-k. Keep it eligible
+                // (it is reachable) but score it well below the model's
+                // picks so it only wins if all model picks are blocked.
+                modelScore = UnconsideredActionBase + mapScore * 0.1f;
+                reason = "world model did not consider this action in its top-k";
+            }
+
+            float safetyAdj = FirstStepSafetyScore(game, action);
+            float finalScore = blocked
+                ? InvalidScore
+                : modelScore + safetyAdj * SidecarSafetyWeight;
+
+            rankings[action] = new BrainActionScore
+            {
+                action = action,
+                actionName = RogueObservationBuilder.ActionName(action),
+                predictedReward = blocked ? 0f : modelScore,
+                rolloutScore = finalScore,
+                selected = false,
+                reason = reason,
+            };
+        }
+
+        for (int k = 0; k < plan.TopKActions.Length; k++)
+        {
+            var seq = plan.TopKActions[k];
+            if (seq == null || seq.Length == 0)
+            {
+                continue;
+            }
+            var names = seq.Select(RogueObservationBuilder.ActionName).ToArray();
+            float kScore = plan.TopKScores != null && k < plan.TopKScores.Length
+                ? plan.TopKScores[k]
+                : 0f;
+            futures.Add(new BrainFuture
+            {
+                actions = names,
+                score = kScore,
+                summary = $"world-model rollout top-{k + 1} (score {kScore:0.00}): {string.Join(" -> ", names)}",
+            });
+        }
+
+        var ordered = rankings.OrderByDescending(s => s.rolloutScore).ToArray();
+        BrainActionScore selectedScore = null;
+        if (ordered.Length > 0)
+        {
+            ordered[0].selected = true;
+            selectedScore = ordered[0];
+        }
+
+        string label = $"WORLD MODEL SIDECAR ({plan.NumCandidates}x{plan.Horizon})";
+        return new BrainHUDData
+        {
+            modelLoaded = true,
+            aiEnabled = aiEnabled,
+            modeLabel = label,
+            selectedAction = selectedScore != null
+                ? selectedScore.actionName.ToUpperInvariant()
+                : "NONE",
+            explanation = selectedScore != null
+                ? $"Choose {selectedScore.actionName.ToUpperInvariant()} because {selectedScore.reason}."
+                : "No valid action was found in the sidecar plan.",
+            actionRanking = ordered,
+            imaginedFutures = futures
+                .OrderByDescending(f => f.score)
                 .Take(3)
                 .ToArray(),
             metrics = metrics ?? BrainMetrics.Empty(),
@@ -739,5 +903,89 @@ public static class BrainPlanner
         public List<int> Actions { get; }
         public float FirstReward { get; }
         public float TotalScore { get; }
+    }
+
+    /// <summary>
+    /// Summary of one <c>POST /plan_actions</c> response, reshaped for
+    /// <see cref="DecideWithSidecarPlan"/>. The Unity client (see
+    /// <see cref="LewmClient.PlanResponse"/>) holds the wire format with
+    /// the top-k actions flattened row-major; this struct is the
+    /// inflated 2D view the planner reasons about.
+    ///
+    /// <see cref="BestActions"/> and <c>TopKActions[0]</c> always
+    /// reference the same sequence.
+    /// </summary>
+    public class SidecarPlanSummary
+    {
+        public int[] BestActions;
+        public float BestScore;
+        public int[][] TopKActions;
+        public float[] TopKScores;
+        public int Horizon;
+        public int NumCandidates;
+
+        /// <summary>
+        /// Inflate the flat <see cref="LewmClient.PlanResponse"/> wire
+        /// format into the 2-D shape <see cref="DecideWithSidecarPlan"/>
+        /// expects. Returns <c>null</c> if the response is malformed
+        /// (caller should fall back to the mission planner).
+        /// </summary>
+        public static SidecarPlanSummary FromPlanResponse(LewmClient.PlanResponse response)
+        {
+            if (response == null
+                || response.best_actions == null
+                || response.best_actions.Length == 0
+                || response.horizon <= 0)
+            {
+                return null;
+            }
+
+            int topK = response.top_k;
+            if (topK <= 0)
+            {
+                topK = response.top_k_scores != null ? response.top_k_scores.Length : 0;
+            }
+            int horizon = response.horizon;
+
+            int[][] grid;
+            float[] scores;
+            if (response.top_k_actions_flat != null
+                && response.top_k_scores != null
+                && topK > 0
+                && response.top_k_actions_flat.Length >= topK * horizon)
+            {
+                grid = new int[topK][];
+                for (int k = 0; k < topK; k++)
+                {
+                    var row = new int[horizon];
+                    for (int t = 0; t < horizon; t++)
+                    {
+                        row[t] = response.top_k_actions_flat[k * horizon + t];
+                    }
+                    grid[k] = row;
+                }
+                scores = new float[topK];
+                for (int k = 0; k < topK; k++)
+                {
+                    scores[k] = k < response.top_k_scores.Length ? response.top_k_scores[k] : 0f;
+                }
+            }
+            else
+            {
+                // Fall back to a one-row "top-k" containing just the best plan.
+                grid = new int[][] { response.best_actions };
+                scores = new float[] { response.best_score };
+            }
+
+            return new SidecarPlanSummary
+            {
+                BestActions = response.best_actions,
+                BestScore = response.best_score,
+                TopKActions = grid,
+                TopKScores = scores,
+                Horizon = horizon,
+                NumCandidates = response.num_candidates,
+            };
+        }
     }
 }
