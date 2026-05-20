@@ -15,7 +15,9 @@ Endpoints
 - ``GET /healthz`` — liveness probe.
 - ``GET /info`` — model metadata (embed_dim, action_dim, image_size,
   sequence_length, service).
-- ``POST /score_actions`` — score candidate action sequences.
+- ``POST /score_actions`` — score caller-supplied candidate sequences.
+- ``POST /plan_actions`` — random-shooting planner: sample N candidate
+  sequences server-side and return the best plan + top-k. Added in M5.
 
 Request payload for ``/score_actions``::
 
@@ -56,6 +58,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from .data import render_board_to_pixels
+from .planner import random_shooting
 
 
 SERVICE_VERSION = "lewm.sidecar.v1"
@@ -76,6 +79,45 @@ class ScoreRequest(BaseModel):
 
 class ScoreResponse(BaseModel):
     scores: list[float]
+    horizon: int
+    service: str = SERVICE_VERSION
+
+
+class PlanRequest(BaseModel):
+    """Request body for ``/plan_actions``.
+
+    The planner samples ``num_candidates`` action sequences of length
+    ``horizon`` server-side, scores them, and returns the best plus a
+    flat ``top_k`` summary suitable for Unity's ``JsonUtility`` (which
+    does not support nested ``int[][]``).
+    """
+
+    board_width: int = Field(..., gt=0)
+    board_height: int = Field(..., gt=0)
+    board_state: list[int]
+    horizon: int = Field(..., ge=1)
+    num_candidates: int = Field(64, ge=1, le=4096)
+    top_k: int = Field(3, ge=1, le=64)
+    discount: float = 0.95
+    done_penalty: float = 1.0
+    # Optional RNG seed for reproducible sampling (mainly for tests).
+    seed: int | None = None
+
+
+class PlanResponse(BaseModel):
+    """Server response for ``/plan_actions``.
+
+    ``top_k_actions_flat`` is row-major (``top_k * horizon``) so the
+    Unity JsonUtility client can reconstruct the 2-D matrix without a
+    custom serializer.
+    """
+
+    best_actions: list[int]
+    best_score: float
+    top_k_actions_flat: list[int]
+    top_k_scores: list[float]
+    num_candidates: int
+    top_k: int
     horizon: int
     service: str = SERVICE_VERSION
 
@@ -163,6 +205,19 @@ def info() -> InfoResponse:
     )
 
 
+def _validate_board(req_board_state: list[int], width: int, height: int) -> np.ndarray:
+    expected = width * height
+    if len(req_board_state) != expected:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"board_state has {len(req_board_state)} cells, "
+                f"expected board_width({width}) * board_height({height}) = {expected}"
+            ),
+        )
+    return np.asarray(req_board_state, dtype=np.int32).reshape(height, width)
+
+
 @app.post("/score_actions", response_model=ScoreResponse)
 def score_actions(req: ScoreRequest) -> ScoreResponse:
     if not _state.ready:
@@ -180,16 +235,7 @@ def score_actions(req: ScoreRequest) -> ScoreResponse:
             ),
         )
 
-    expected_board = req.board_width * req.board_height
-    if len(req.board_state) != expected_board:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"board_state has {len(req.board_state)} cells, "
-                f"expected board_width({req.board_width}) * "
-                f"board_height({req.board_height}) = {expected_board}"
-            ),
-        )
+    board = _validate_board(req.board_state, req.board_width, req.board_height)
 
     expected_actions = req.num_sequences * req.horizon
     if len(req.action_sequences_flat) != expected_actions:
@@ -202,9 +248,6 @@ def score_actions(req: ScoreRequest) -> ScoreResponse:
             ),
         )
 
-    board = np.asarray(req.board_state, dtype=np.int32).reshape(
-        req.board_height, req.board_width
-    )
     pixels = render_board_to_pixels(board, cfg.image_size)
     obs = torch.from_numpy(pixels).float().unsqueeze(0).to(_state.device)
 
@@ -234,4 +277,61 @@ def score_actions(req: ScoreRequest) -> ScoreResponse:
     return ScoreResponse(
         scores=scores[0].cpu().tolist(),
         horizon=req.horizon,
+    )
+
+
+@app.post("/plan_actions", response_model=PlanResponse)
+def plan_actions(req: PlanRequest) -> PlanResponse:
+    """Server-side random shooting over JEPA-imagined rollouts.
+
+    The Unity client (see ``Assets/Scripts/ML/LewmClient.cs``) calls this
+    once per decision tick instead of sampling thousands of sequences
+    itself. We return the best plan (length ``horizon``) plus the top-k
+    alternates so the brain HUD can show "imagined futures".
+    """
+    if not _state.ready:
+        raise HTTPException(status_code=503, detail="no model loaded")
+
+    cfg = _state.config
+    max_horizon = max(1, cfg.sequence_length - 1)
+    if req.horizon > max_horizon:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"horizon {req.horizon} exceeds max_horizon={max_horizon} "
+                f"(sequence_length={cfg.sequence_length}); train with a longer "
+                "sequence_length or shorten the plan"
+            ),
+        )
+
+    board = _validate_board(req.board_state, req.board_width, req.board_height)
+    pixels = render_board_to_pixels(board, cfg.image_size)
+    obs = torch.from_numpy(pixels).float().to(_state.device)
+
+    result = random_shooting(
+        _state.model,
+        obs,
+        horizon=req.horizon,
+        num_candidates=req.num_candidates,
+        action_dim=cfg.action_dim,
+        top_k=req.top_k,
+        discount=req.discount,
+        done_penalty=req.done_penalty,
+        seed=req.seed,
+        device=_state.device,
+    )
+
+    # Flatten top_k_actions row-major so JsonUtility can deserialize.
+    flat: list[int] = []
+    for seq in result.top_k_actions:
+        flat.extend(int(a) for a in seq)
+
+    return PlanResponse(
+        best_actions=[int(a) for a in result.best_actions],
+        best_score=result.best_score,
+        top_k_actions_flat=flat,
+        top_k_scores=[float(s) for s in result.top_k_scores],
+        num_candidates=result.num_candidates,
+        top_k=len(result.top_k_scores),
+        horizon=result.horizon,
     )

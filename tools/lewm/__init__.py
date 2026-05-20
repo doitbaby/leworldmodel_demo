@@ -5,11 +5,14 @@ https://github.com/lucas-maes/le-wm (MIT, commit c8a4417), adapted for the
 rogue game's discrete actions and procedural levels.
 
 Submodules:
-- :mod:`tools.lewm.module`  -- vendored upstream layers (SIGReg, ARPredictor, ...)
-- :mod:`tools.lewm.encoder` -- small CNN encoder replacing the upstream ViT
-- :mod:`tools.lewm.jepa`    -- JEPA wrapper with reward / done heads
-- :mod:`tools.lewm.data`    -- synthetic + JSONL datasets for training
-- :mod:`tools.lewm.train`   -- PyTorch-only training loop (CLI entry point)
+- :mod:`tools.lewm.module`   -- vendored upstream layers (SIGReg, ARPredictor, ...)
+- :mod:`tools.lewm.encoder`  -- small CNN encoder replacing the upstream ViT
+- :mod:`tools.lewm.jepa`     -- JEPA wrapper with reward / done heads
+- :mod:`tools.lewm.data`     -- synthetic + JSONL datasets for training
+- :mod:`tools.lewm.train`    -- PyTorch-only training loop (CLI entry point)
+- :mod:`tools.lewm.schedule` -- LR schedule helpers (cosine + warmup)
+- :mod:`tools.lewm.planner`  -- random-shooting actor over JEPA rollouts (M5)
+- :mod:`tools.lewm.sidecar`  -- FastAPI inference + planning service
 """
 
-__all__ = ["module", "encoder", "jepa", "data", "train"]
+__all__ = ["module", "encoder", "jepa", "data", "train", "schedule", "planner"]

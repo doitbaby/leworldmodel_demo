@@ -2,8 +2,9 @@
 
 Drives :mod:`tools.lewm.train` for a smoke checkpoint, points
 :mod:`tools.lewm.sidecar` at it, and exercises ``/healthz``, ``/info``,
-and ``/score_actions`` through Starlette's ``TestClient`` (no real
-network). Mirrors the JSON shape the Unity ``LewmClient.cs`` will send.
+``/score_actions``, and ``/plan_actions`` through Starlette's
+``TestClient`` (no real network). Mirrors the JSON shape the Unity
+``LewmClient.cs`` will send.
 
 Run with::
 
@@ -162,6 +163,95 @@ def main() -> int:
             _check(
                 r.status_code == 400,
                 f"oversized horizon expected 400, got {r.status_code}: {r.text}",
+            )
+
+            # ----------------------------------------------------------
+            # /plan_actions (M5)
+            # ----------------------------------------------------------
+            plan_payload = {
+                "board_width": 8,
+                "board_height": 8,
+                "board_state": board.flatten().tolist(),
+                "horizon": horizon,
+                "num_candidates": 16,
+                "top_k": 3,
+                "discount": 0.95,
+                "done_penalty": 1.0,
+                "seed": 4242,
+            }
+            r = client.post("/plan_actions", json=plan_payload)
+            _check(
+                r.status_code == 200,
+                f"/plan_actions status {r.status_code}: {r.text}",
+            )
+            plan = r.json()
+            _check(
+                len(plan["best_actions"]) == horizon,
+                f"/plan_actions best_actions length {plan}",
+            )
+            _check(
+                plan["top_k"] == 3, f"/plan_actions top_k {plan}",
+            )
+            _check(
+                len(plan["top_k_scores"]) == plan["top_k"],
+                f"/plan_actions top_k_scores length {plan}",
+            )
+            _check(
+                len(plan["top_k_actions_flat"]) == plan["top_k"] * horizon,
+                f"/plan_actions top_k_actions_flat length {plan}",
+            )
+            _check(
+                plan["num_candidates"] == 16,
+                f"/plan_actions num_candidates {plan}",
+            )
+            # top-k must be sorted best-first
+            for i in range(1, len(plan["top_k_scores"])):
+                _check(
+                    plan["top_k_scores"][i - 1] >= plan["top_k_scores"][i] - 1e-6,
+                    f"/plan_actions top_k not sorted at i={i}: {plan['top_k_scores']}",
+                )
+            # best_actions equals the first row of top_k_actions_flat
+            _check(
+                plan["best_actions"]
+                == plan["top_k_actions_flat"][:horizon],
+                f"/plan_actions best_actions vs top_k_actions_flat row 0 mismatch: {plan}",
+            )
+
+            # Determinism: same seed produces identical plan via HTTP.
+            r2 = client.post("/plan_actions", json=plan_payload)
+            _check(r2.status_code == 200, f"/plan_actions retry status {r2.status_code}")
+            plan2 = r2.json()
+            _check(
+                plan2["best_actions"] == plan["best_actions"],
+                f"/plan_actions determinism: best_actions differ\n  a={plan['best_actions']}\n  b={plan2['best_actions']}",
+            )
+            _check(
+                abs(plan2["best_score"] - plan["best_score"]) < 1e-5,
+                f"/plan_actions determinism: best_score {plan['best_score']} vs {plan2['best_score']}",
+            )
+
+            # Bad payload: board_state length mismatch.
+            bad = {**plan_payload, "board_state": [0] * 17}
+            r = client.post("/plan_actions", json=bad)
+            _check(
+                r.status_code == 400,
+                f"/plan_actions bad board expected 400, got {r.status_code}: {r.text}",
+            )
+
+            # Bad payload: oversized horizon.
+            bad = {**plan_payload, "horizon": horizon + 5}
+            r = client.post("/plan_actions", json=bad)
+            _check(
+                r.status_code == 400,
+                f"/plan_actions oversized horizon expected 400, got {r.status_code}: {r.text}",
+            )
+
+            # Bad payload: num_candidates out of bounds (pydantic 422).
+            bad = {**plan_payload, "num_candidates": 0}
+            r = client.post("/plan_actions", json=bad)
+            _check(
+                r.status_code in (400, 422),
+                f"/plan_actions zero candidates expected 4xx, got {r.status_code}: {r.text}",
             )
 
     print("OK: sidecar integration test passed.")

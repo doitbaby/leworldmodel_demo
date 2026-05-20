@@ -17,8 +17,8 @@ this README is the day-to-day usage guide.
 | M1 — vendor modules + smoke training | #1 | landed. |
 | M2 — Unity pixel observation builder + JSONL v3 | #2 | landed. |
 | M3 — Python inference sidecar | #4 | landed (sidecar + CLI + Unity client). |
-| M4 — training pipeline (LR schedule + val split + metrics CSV + best-ckpt) | this PR | landed. |
-| M5 — Dreamer-style actor on imagined rollouts | TBD | not started. |
+| M4 — training pipeline (LR schedule + val split + metrics CSV + best-ckpt) | #5 | landed. |
+| M5 — Dreamer-style actor on imagined rollouts | this PR | landed. |
 | M6 — benchmark harness | TBD | not started. |
 | M7 — CI + pre-commit | TBD | not started. |
 
@@ -33,12 +33,14 @@ tools/lewm/
 ├── data.py       # synthetic + v2/v3 JSONL datasets (vector + board-pixel)
 ├── train.py      # PyTorch-only training entry point
 ├── schedule.py   # cosine + warmup LR schedules (M4)
-├── sidecar.py    # FastAPI app wrapping JEPA inference (M3)
+├── planner.py    # random-shooting actor over JEPA rollouts (M5)
+├── sidecar.py    # FastAPI app wrapping JEPA inference + planning (M3+M5)
 ├── serve.py      # CLI: load checkpoint and boot uvicorn (M3)
 ├── tests/
 │   ├── test_board_jsonl.py        # round-trip check for the v3 board JSONL path
-│   ├── test_sidecar.py            # in-process TestClient integration for the sidecar
-│   └── test_training_pipeline.py  # M4 end-to-end (train → metrics CSV → best.pt → sidecar)
+│   ├── test_sidecar.py            # in-process TestClient integration (incl. /plan_actions)
+│   ├── test_training_pipeline.py  # M4 end-to-end (train → metrics CSV → best.pt → sidecar)
+│   └── test_planner.py            # M5 random-shooting actor unit test
 ├── requirements.txt
 └── README.md     # you are here
 ```
@@ -216,15 +218,21 @@ python -m tools.lewm.train \
     --best-output results/lewm/best.pt
 ```
 
-## Inference sidecar (M3)
+## Inference sidecar (M3 + M5)
 
-Unity cannot run PyTorch / JEPA in-engine. M3 adds a thin Python sidecar
-that wraps a trained checkpoint behind three HTTP endpoints:
+Unity cannot run PyTorch / JEPA in-engine. M3 added a thin Python
+sidecar that wraps a trained checkpoint, and M5 added the
+`/plan_actions` endpoint that lets Unity outsource the action search
+entirely:
 
 ```
 GET  /healthz          → { "status": "ok" | "no_model", "service": ... }
-GET  /info             → { embed_dim, action_dim, image_size, sequence_length, service }
+GET  /info             → { embed_dim, action_dim, image_size,
+                          sequence_length, max_horizon, service }
 POST /score_actions    → { scores: [float, ...], horizon, service }
+POST /plan_actions     → { best_actions, best_score,
+                          top_k_actions_flat, top_k_scores,
+                          num_candidates, top_k, horizon, service }   (M5)
 ```
 
 Boot it like this once `python -m tools.lewm.train` has produced a
@@ -238,26 +246,88 @@ python -m tools.lewm.serve \
 
 The Unity side talks to the sidecar via
 [`Assets/Scripts/ML/LewmClient.cs`](../../Assets/Scripts/ML/LewmClient.cs)
-— a small `MonoBehaviour` wrapping `UnityWebRequest`. M3 only lands the
-wire (`LewmClient` is **not yet** referenced by `BrainPlanner` /
-`WorldModelPlannerAgent`); M5 plugs it into the live decision loop with
-a graceful fallback to the existing mission heuristic + LeWM-lite path
-when the sidecar is unreachable.
+— a small `MonoBehaviour` wrapping `UnityWebRequest`. From M5 onward,
+`WorldModelPlannerAgent` queries `POST /plan_actions` as the **primary**
+scorer (see [Model-first action selection (M5)](#model-first-action-selection-m5))
+and only falls back to the mission heuristic when the sidecar is
+unreachable.
 
-The flat action layout (`action_sequences_flat = num_sequences ×
-horizon` row-major ints) is a JsonUtility compatibility quirk: Unity's
-JsonUtility does not handle nested arrays. The sidecar reshapes
-internally before calling `JEPA.score_action_sequences`.
+The flat action layouts (`action_sequences_flat` in `/score_actions`,
+`top_k_actions_flat` in `/plan_actions`) are a JsonUtility compatibility
+quirk: Unity's JsonUtility does not deserialize nested arrays. The
+sidecar reshapes internally before calling
+`JEPA.score_action_sequences`, and the Unity client
+`LewmClient.PlanResponse.GetTopKAction(k, t)` inflates the wire format
+back into a 2-D view.
+
+## Model-first action selection (M5)
+
+From M5 onward, the world model is the **primary** decision maker, not
+a tiebreaker. The flow is:
+
+1. `WorldModelPlannerAgent.Update` snapshots the current board state
+   (via `PixelObservationBuilder.BuildCellCodes`).
+2. It sends `POST /plan_actions` to the sidecar with
+   `{ board_state, horizon, num_candidates, top_k, ... }`.
+3. The sidecar samples `num_candidates` random action sequences,
+   scores each through `JEPA.score_action_sequences`, and returns the
+   best plan plus the top-k for the HUD.
+4. `BrainPlanner.DecideWithSidecarPlan` translates the plan into a
+   per-action ranking: the model score dominates, the map heuristic
+   only hard-rejects blocked moves, and a small first-step safety bias
+   (`SidecarSafetyWeight = 0.5`) keeps the agent from walking adjacent
+   into an enemy when an equally-scored alternative exists.
+5. The brain HUD renders the top-k plans as "imagined futures".
+
+When the sidecar is offline or unreachable, the agent automatically
+falls back to the existing `BrainPlanner.Decide` (mission heuristic +
+local LeWM-lite tiebreaker) so the demo keeps working without Python.
+
+### Trying it locally
+
+1. Train (or smoke-train) a checkpoint:
+   ```bash
+   python -m tools.lewm.train --smoke
+   ```
+2. Start the sidecar:
+   ```bash
+   python -m tools.lewm.serve --checkpoint results/lewm/checkpoint.pt
+   ```
+3. Open Unity, select the `WorldModelPlannerAgent` GameObject, and in
+   the inspector toggle:
+   - **Use Sidecar** = on
+   - **Sidecar Base Url** = `http://127.0.0.1:5555` (default)
+   - **Sidecar Candidates** = 64 (raise for stronger planning at the
+     cost of latency)
+   - **Sidecar Top K** = 3 (drives the HUD's imagined-futures panel)
+4. Enter Play mode and press **M** to give control to the agent. The
+   BrainHUD mode label switches to **WORLD MODEL SIDECAR (Nx H)**.
+
+### Direct planner usage (Python)
+
+The planner is also callable directly without HTTP, useful for
+batched evaluation or benchmarks:
+
+```python
+from tools.lewm.planner import random_shooting
+plan = random_shooting(
+    model, current_obs,
+    horizon=horizon, num_candidates=128,
+    action_dim=4, top_k=5, seed=0,
+)
+print(plan.best_actions, plan.best_score)
+```
 
 ## Verification
 
-Four cheap checks cover the LeWM port end-to-end without GPU or Unity:
+Five cheap checks cover the LeWM port end-to-end without GPU or Unity:
 
 ```bash
 python -m tools.lewm.train --smoke                       # synthetic smoke training
 python -m tools.lewm.tests.test_board_jsonl              # v3 JSONL round-trip
-python -m tools.lewm.tests.test_sidecar                  # FastAPI sidecar integration
-python -m tools.lewm.tests.test_training_pipeline        # M4 full pipeline (NEW)
+python -m tools.lewm.tests.test_sidecar                  # FastAPI sidecar integration (incl. /plan_actions)
+python -m tools.lewm.tests.test_training_pipeline        # M4 full pipeline
+python -m tools.lewm.tests.test_planner                  # M5 random-shooting actor unit test
 ```
 
 The smoke train exercises encoder, Embedder, ARPredictor, RewardHead,
@@ -265,11 +335,15 @@ DoneHead, SIGReg, optimiser, checkpoint save. The round-trip test confirms
 that the JSONL written by `RogueTransitionRecorder.cs` (schema v3) can be
 read back and rendered into the exact `(T, 3, H, W)` pixel tensors the
 training loop expects. The sidecar test trains a tiny checkpoint, loads
-it via `load_checkpoint`, then drives `/healthz`, `/info`, and
-`/score_actions` through Starlette's `TestClient`. The M4 pipeline test
-generates a synthetic v3 JSONL, drives `tools.lewm.train` through its
-CLI with `--val-split` + cosine schedule + metrics CSV, then re-opens
-the resulting `best.pt` through the sidecar's `load_checkpoint`.
+it via `load_checkpoint`, then drives `/healthz`, `/info`, `/score_actions`
+and `/plan_actions` (M5) through Starlette's `TestClient` — including
+bad-payload error paths. The M4 pipeline test generates a synthetic v3
+JSONL, drives `tools.lewm.train` through its CLI with `--val-split` +
+cosine schedule + metrics CSV, then re-opens the resulting `best.pt`
+through the sidecar's `load_checkpoint`. The M5 planner test trains a
+smoke checkpoint and asserts that random shooting (1) returns a sorted
+top-k with the best plan at index 0, (2) is deterministic at a fixed
+seed, and (3) honours the optional `include_sequences` forcing path.
 
 The existing `tools/world_model/train_world_model.py` MLP path is untouched
 and continues to support the live Unity demo.

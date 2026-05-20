@@ -31,12 +31,38 @@ public class WorldModelPlannerAgent : MonoBehaviour
     public float GameOverPenalty = -1.0f;
     public Key ToggleKey = Key.M;
 
+    [Header("LeWorldModel sidecar (M5)")]
+    [Tooltip("When true, the agent queries the Python sidecar (POST /plan_actions) as the primary scorer and falls back to the local mission planner only when the sidecar is unreachable.")]
+    public bool UseSidecar = false;
+    [Tooltip("Pre-existing LewmClient component. If left null, one will be added to this GameObject automatically when UseSidecar is true.")]
+    public LewmClient SidecarClient;
+    public string SidecarBaseUrl = "http://127.0.0.1:5555";
+    [Range(4, 256)]
+    public int SidecarCandidates = 64;
+    [Range(1, 8)]
+    public int SidecarTopK = 3;
+    [Tooltip("0 = let the sidecar pick a fresh seed each request (stochastic).")]
+    public int SidecarSeed = 0;
+    [Tooltip("How long to wait between /info probes when the sidecar appears offline. Successful probes also refresh the cached max_horizon.")]
+    [Range(0.5f, 60f)]
+    public float SidecarHealthProbeSeconds = 5f;
+    public float SidecarRequestTimeoutSeconds = 1.0f;
+
     private WorldModelWeights m_Model;
     private BrainMetrics m_Metrics = BrainMetrics.Empty();
     private float m_NextDecisionTime;
     private bool m_IsModelControlEnabled;
     private bool m_UiBound;
     private PendingTransition m_PendingTransition;
+
+    // ---- sidecar state (M5) ----
+    private bool m_SidecarClientReady;
+    private bool m_SidecarOnline;
+    private bool m_SidecarInfoLoaded;
+    private bool m_SidecarRequestInFlight;
+    private float m_NextHealthProbe;
+    private int m_SidecarMaxHorizon = 1;
+    private int m_SidecarActionDim = RogueObservationBuilder.ActionCount;
 
     private void Start()
     {
@@ -60,6 +86,13 @@ public class WorldModelPlannerAgent : MonoBehaviour
         }
 
         SetModelControl(StartWithModelEnabled || DisableHumanInput);
+
+        if (UseSidecar)
+        {
+            EnsureSidecarClient();
+            m_NextHealthProbe = Time.time;
+        }
+
         PublishBrainFrame();
     }
 
@@ -72,6 +105,12 @@ public class WorldModelPlannerAgent : MonoBehaviour
         if (Game != null && Game.PlayerController != null && !Game.PlayerController.IsMoving)
         {
             FlushPendingTransition();
+        }
+
+        if (UseSidecar)
+        {
+            EnsureSidecarClient();
+            MaybeProbeSidecar();
         }
 
         if (!m_IsModelControlEnabled)
@@ -89,39 +128,25 @@ public class WorldModelPlannerAgent : MonoBehaviour
             return;
         }
 
-        m_NextDecisionTime = Time.time + DecisionIntervalSeconds;
-        var brainFrame = BuildBrainFrame();
-        BrainHUD?.UpdateBrain(brainFrame);
-        int action = SelectedAction(brainFrame);
-        var previousObservation = RogueObservationBuilder.Build(Game);
-        int previousLevel = Game.CurrentLevel;
-        int previousFood = Game.CurrentFoodAmount;
-        int previousDistance = Game.DistanceToExit(Game.PlayerCellPosition);
-        int previousBoardWidth = PixelObservationBuilder.GetBoardWidth(Game);
-        int previousBoardHeight = PixelObservationBuilder.GetBoardHeight(Game);
-        int[] previousBoardState = PixelObservationBuilder.BuildCellCodes(Game);
-        bool accepted = Game.PlayerController.TryStep(RogueObservationBuilder.ActionToDirection(action), smoothMovement: !InstantActions);
-
-        if (RecordPlannerTransitions && TransitionRecorder != null)
+        // Sidecar path: fire one async /plan_actions request and apply
+        // the first action of the returned best plan in the callback.
+        // The decision-interval bump happens inside the callback so we
+        // do NOT race-fire while a request is in flight.
+        if (UseSidecar
+            && m_SidecarClientReady
+            && m_SidecarOnline
+            && m_SidecarInfoLoaded
+            && !m_SidecarRequestInFlight)
         {
-            m_PendingTransition = new PendingTransition
-            {
-                observation = previousObservation,
-                action = action,
-                accepted = accepted,
-                previousLevel = previousLevel,
-                previousFood = previousFood,
-                previousDistance = previousDistance,
-                previousBoardWidth = previousBoardWidth,
-                previousBoardHeight = previousBoardHeight,
-                previousBoardState = previousBoardState,
-            };
-
-            if (!accepted || InstantActions)
-            {
-                FlushPendingTransition();
-            }
+            TryStepViaSidecar();
+            return;
         }
+
+        // Fallback path (mission-heuristic BrainPlanner, unchanged
+        // behavior). This runs when the user has not enabled sidecar
+        // control or the sidecar is unreachable / mid-recovery.
+        m_NextDecisionTime = Time.time + DecisionIntervalSeconds;
+        DecideAndStepViaBrainPlanner();
     }
 
     public void ToggleModelControl()
@@ -332,6 +357,227 @@ public class WorldModelPlannerAgent : MonoBehaviour
                 TransitionRecorder = gameObject.AddComponent<RogueTransitionRecorder>();
             }
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Sidecar wiring (M5)
+    // ------------------------------------------------------------------
+
+    private void EnsureSidecarClient()
+    {
+        if (!UseSidecar)
+        {
+            return;
+        }
+
+        if (m_SidecarClientReady)
+        {
+            if (SidecarClient != null)
+            {
+                SidecarClient.BaseUrl = SidecarBaseUrl;
+                SidecarClient.TimeoutSeconds = SidecarRequestTimeoutSeconds;
+            }
+            return;
+        }
+
+        if (SidecarClient == null)
+        {
+            SidecarClient = GetComponent<LewmClient>();
+            if (SidecarClient == null)
+            {
+                SidecarClient = gameObject.AddComponent<LewmClient>();
+            }
+        }
+
+        SidecarClient.BaseUrl = SidecarBaseUrl;
+        SidecarClient.TimeoutSeconds = SidecarRequestTimeoutSeconds;
+        m_SidecarClientReady = true;
+    }
+
+    private void MaybeProbeSidecar()
+    {
+        if (!m_SidecarClientReady || m_SidecarRequestInFlight)
+        {
+            return;
+        }
+
+        if (Time.time < m_NextHealthProbe)
+        {
+            return;
+        }
+
+        m_NextHealthProbe = Time.time + Mathf.Max(0.5f, SidecarHealthProbeSeconds);
+        StartCoroutine(SidecarClient.Info(OnSidecarInfo, OnSidecarProbeFailed));
+    }
+
+    private void OnSidecarInfo(LewmClient.InfoResponse info)
+    {
+        if (info == null)
+        {
+            m_SidecarOnline = false;
+            m_SidecarInfoLoaded = false;
+            return;
+        }
+
+        m_SidecarOnline = true;
+        m_SidecarInfoLoaded = true;
+        m_SidecarMaxHorizon = Mathf.Max(1, info.max_horizon);
+        m_SidecarActionDim = Mathf.Max(1, info.action_dim);
+
+        if (m_SidecarActionDim != RogueObservationBuilder.ActionCount)
+        {
+            Debug.LogWarning(
+                $"Sidecar reports action_dim={m_SidecarActionDim} but Unity ActionCount={RogueObservationBuilder.ActionCount}. " +
+                "Plans may not map cleanly; falling back to mission planner if requests fail.");
+        }
+    }
+
+    private void OnSidecarProbeFailed(string err)
+    {
+        if (m_SidecarOnline)
+        {
+            // Only log the transition from online -> offline; further
+            // failures stay silent so the console does not spam every
+            // probe interval while the sidecar is down.
+            Debug.LogWarning($"Sidecar /info probe failed: {err}. Falling back to mission planner.");
+        }
+        m_SidecarOnline = false;
+        m_SidecarInfoLoaded = false;
+    }
+
+    private void TryStepViaSidecar()
+    {
+        m_SidecarRequestInFlight = true;
+
+        // Snapshot pre-step state. The game state cannot mutate between
+        // here and the callback because we already gated on
+        // ``Game.PlayerController.IsMoving == false`` and the agent
+        // owns input (human input disabled while m_IsModelControlEnabled).
+        var snapshot = SnapshotPreStep();
+
+        int requestHorizon = Mathf.Clamp(PlanningHorizon, 1, Mathf.Max(1, m_SidecarMaxHorizon));
+        var request = new LewmClient.PlanRequest
+        {
+            board_width = snapshot.previousBoardWidth,
+            board_height = snapshot.previousBoardHeight,
+            board_state = snapshot.previousBoardState,
+            horizon = requestHorizon,
+            num_candidates = Mathf.Max(1, SidecarCandidates),
+            top_k = Mathf.Clamp(SidecarTopK, 1, 8),
+            discount = RolloutDiscount,
+            done_penalty = 1.0f,
+            seed = SidecarSeed,
+        };
+
+        StartCoroutine(SidecarClient.PlanActions(
+            request,
+            plan => OnSidecarPlanReceived(plan, snapshot),
+            err => OnSidecarPlanFailed(err, snapshot)));
+    }
+
+    private PendingTransition SnapshotPreStep()
+    {
+        return new PendingTransition
+        {
+            observation = RogueObservationBuilder.Build(Game),
+            previousLevel = Game.CurrentLevel,
+            previousFood = Game.CurrentFoodAmount,
+            previousDistance = Game.DistanceToExit(Game.PlayerCellPosition),
+            previousBoardWidth = PixelObservationBuilder.GetBoardWidth(Game),
+            previousBoardHeight = PixelObservationBuilder.GetBoardHeight(Game),
+            previousBoardState = PixelObservationBuilder.BuildCellCodes(Game),
+        };
+    }
+
+    private void OnSidecarPlanReceived(LewmClient.PlanResponse response, PendingTransition snapshot)
+    {
+        m_SidecarRequestInFlight = false;
+        m_NextDecisionTime = Time.time + DecisionIntervalSeconds;
+
+        // Stale-check: user may have toggled off, the level may have
+        // restarted, or the player may have started moving via some
+        // other code path while the HTTP round-trip was in flight.
+        if (!m_IsModelControlEnabled
+            || Game == null
+            || Game.IsGameOver
+            || Game.PlayerController.IsMoving)
+        {
+            return;
+        }
+
+        var summary = BrainPlanner.SidecarPlanSummary.FromPlanResponse(response);
+        if (summary == null)
+        {
+            Debug.LogWarning("Sidecar /plan_actions returned malformed plan; falling back to mission planner.");
+            m_SidecarOnline = false;
+            FallbackStepAfterSidecarFailure(snapshot);
+            return;
+        }
+
+        var brainFrame = BrainPlanner.DecideWithSidecarPlan(
+            Game,
+            summary,
+            m_Metrics,
+            m_IsModelControlEnabled);
+        BrainHUD?.UpdateBrain(brainFrame);
+
+        StepWithAction(SelectedAction(brainFrame), snapshot);
+    }
+
+    private void OnSidecarPlanFailed(string err, PendingTransition snapshot)
+    {
+        m_SidecarRequestInFlight = false;
+        m_SidecarOnline = false;
+        m_NextHealthProbe = Time.time + 0.5f;  // re-probe sooner after a failure
+        m_NextDecisionTime = Time.time + DecisionIntervalSeconds;
+        Debug.LogWarning($"Sidecar /plan_actions failed: {err}. Falling back to mission planner for this step.");
+        FallbackStepAfterSidecarFailure(snapshot);
+    }
+
+    private void FallbackStepAfterSidecarFailure(PendingTransition snapshot)
+    {
+        if (!m_IsModelControlEnabled
+            || Game == null
+            || Game.IsGameOver
+            || Game.PlayerController.IsMoving)
+        {
+            return;
+        }
+
+        var brainFrame = BuildBrainFrame();
+        BrainHUD?.UpdateBrain(brainFrame);
+        StepWithAction(SelectedAction(brainFrame), snapshot);
+    }
+
+    private void StepWithAction(int action, PendingTransition snapshot)
+    {
+        bool accepted = Game.PlayerController.TryStep(
+            RogueObservationBuilder.ActionToDirection(action),
+            smoothMovement: !InstantActions);
+
+        if (RecordPlannerTransitions && TransitionRecorder != null)
+        {
+            snapshot.action = action;
+            snapshot.accepted = accepted;
+            m_PendingTransition = snapshot;
+            if (!accepted || InstantActions)
+            {
+                FlushPendingTransition();
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // BrainPlanner (mission heuristic) path
+    // ------------------------------------------------------------------
+
+    private void DecideAndStepViaBrainPlanner()
+    {
+        var brainFrame = BuildBrainFrame();
+        BrainHUD?.UpdateBrain(brainFrame);
+        int action = SelectedAction(brainFrame);
+        var snapshot = SnapshotPreStep();
+        StepWithAction(action, snapshot);
     }
 
     private void FlushPendingTransition()
