@@ -19,8 +19,8 @@ The :func:`random_shooting` entry point is exposed to Unity through the
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Sequence
 
 import numpy as np
 import torch
@@ -119,9 +119,7 @@ def random_shooting(
         g.manual_seed(int(seed))
 
     # Sample (S, H) discrete actions on CPU then move to device once.
-    action_idx = torch.randint(
-        0, action_dim, (num_candidates, horizon), generator=g
-    )
+    action_idx = torch.randint(0, action_dim, (num_candidates, horizon), generator=g)
 
     if include_sequences is not None:
         extras = []
@@ -136,9 +134,7 @@ def random_shooting(
             action_idx = torch.cat([action_idx, forced], dim=0)
 
     # One-hot to (S, H, A) then add the batch dim expected by JEPA.rollout.
-    action_seq = (
-        F.one_hot(action_idx, num_classes=action_dim).float().unsqueeze(0).to(device)
-    )
+    action_seq = F.one_hot(action_idx, num_classes=action_dim).float().unsqueeze(0).to(device)
 
     obs = current_obs.unsqueeze(0).to(device)  # (1, ...)
     scores = model.score_action_sequences(

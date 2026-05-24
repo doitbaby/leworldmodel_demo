@@ -19,8 +19,8 @@ this README is the day-to-day usage guide.
 | M3 — Python inference sidecar | #4 | landed (sidecar + CLI + Unity client). |
 | M4 — training pipeline (LR schedule + val split + metrics CSV + best-ckpt) | #5 | landed. |
 | M5 — Dreamer-style actor on imagined rollouts | #6 | landed. |
-| M6 — benchmark harness (5-mode comparison + CSV metrics) | this PR | landed. |
-| M7 — CI + pre-commit | TBD | not started. |
+| M6 — benchmark harness (5-mode comparison + CSV metrics) | #7 | landed. |
+| M7 — GitHub Actions CI + pre-commit + ruff | this PR | landed. |
 
 ## Layout
 

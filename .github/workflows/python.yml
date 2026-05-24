@@ -1,0 +1,130 @@
+name: Python CI (tools/lewm)
+
+# M7: continuous integration for the leworldmodel_demo Python toolchains.
+# Runs the same eight smoke checks documented in tools/lewm/README.md plus a
+# ruff lint pass over tools/. Unity C# is intentionally not covered here --
+# Unity compile requires a licensed editor and runs on the user's machine.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "tools/**"
+      - "pyproject.toml"
+      - ".pre-commit-config.yaml"
+      - ".github/workflows/python.yml"
+  pull_request:
+    paths:
+      - "tools/**"
+      - "pyproject.toml"
+      - ".pre-commit-config.yaml"
+      - ".github/workflows/python.yml"
+  workflow_dispatch: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: ruff lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            tools/lewm/requirements.txt
+            tools/lewm/requirements-dev.txt
+      - name: Install dev tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r tools/lewm/requirements-dev.txt
+      - name: ruff check
+        run: ruff check tools/
+      - name: ruff format --check
+        run: ruff format --check tools/
+
+  smoke:
+    name: Python smokes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            tools/lewm/requirements.txt
+            tools/world_model/requirements.txt
+      - name: Install runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r tools/lewm/requirements.txt
+          pip install -r tools/world_model/requirements.txt
+      - name: py_compile every Python source under tools/
+        run: |
+          python - <<'PY'
+          import compileall, pathlib, sys
+          root = pathlib.Path("tools")
+          ok = compileall.compile_dir(str(root), force=True, quiet=1)
+          sys.exit(0 if ok else 1)
+          PY
+      - name: smoke 1/8 -- tools.lewm.train --smoke
+        run: python -m tools.lewm.train --smoke
+      - name: smoke 2/8 -- tools.lewm.tests.test_board_jsonl
+        run: python -m tools.lewm.tests.test_board_jsonl
+      - name: smoke 3/8 -- tools.lewm.tests.test_sidecar
+        run: python -m tools.lewm.tests.test_sidecar
+      - name: smoke 4/8 -- tools.lewm.tests.test_training_pipeline
+        run: python -m tools.lewm.tests.test_training_pipeline
+      - name: smoke 5/8 -- tools.lewm.tests.test_planner
+        run: python -m tools.lewm.tests.test_planner
+      - name: smoke 6/8 -- tools.lewm.tests.test_env
+        run: python -m tools.lewm.tests.test_env
+      - name: smoke 7/8 -- tools.lewm.tests.test_benchmark
+        run: python -m tools.lewm.tests.test_benchmark
+      - name: smoke 8/8 -- tools/world_model/train_world_model.py --smoke
+        run: python tools/world_model/train_world_model.py --smoke --epochs 2
+
+  benchmark-smoke:
+    name: M6 benchmark smoke
+    runs-on: ubuntu-latest
+    needs: smoke
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            tools/lewm/requirements.txt
+      - name: Install runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r tools/lewm/requirements.txt
+      - name: Train a smoke JEPA checkpoint
+        run: python -m tools.lewm.train --smoke
+      - name: Run benchmark over all 5 modes (1 episode each)
+        run: |
+          python -m tools.lewm.benchmark --smoke \
+              --checkpoint results/lewm/checkpoint.pt \
+              --output-csv results/lewm/benchmark.csv
+      - name: Show benchmark CSVs
+        run: |
+          echo "=== per-episode ==="
+          cat results/lewm/benchmark.csv
+          echo "=== summary ==="
+          cat results/lewm/benchmark.summary.csv
+      - name: Upload benchmark CSVs
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-smoke-csv
+          path: |
+            results/lewm/benchmark.csv
+            results/lewm/benchmark.summary.csv
+          if-no-files-found: error
+          retention-days: 7

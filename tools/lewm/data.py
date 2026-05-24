@@ -23,9 +23,10 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
+from typing import ClassVar
 
 import numpy as np
 import torch
@@ -45,13 +46,13 @@ __all__ = [
 # Matches the GameManager cell code convention:
 #  -1 wall, 0 empty, 1 exit, 2 enemy, 3 obstacle, 4 food, 5 player.
 ROGUE_CELL_COLORS: dict[int, tuple[int, int, int]] = {
-    -1: (40, 40, 40),     # wall: dark grey
-    0:  (220, 220, 220),  # empty: near-white
-    1:  (0, 200, 80),     # exit: green
-    2:  (220, 30, 30),    # enemy: red
-    3:  (120, 60, 0),     # obstacle: brown
-    4:  (255, 210, 0),    # food: yellow
-    5:  (40, 110, 240),   # player: blue
+    -1: (40, 40, 40),  # wall: dark grey
+    0: (220, 220, 220),  # empty: near-white
+    1: (0, 200, 80),  # exit: green
+    2: (220, 30, 30),  # enemy: red
+    3: (120, 60, 0),  # obstacle: brown
+    4: (255, 210, 0),  # food: yellow
+    5: (40, 110, 240),  # player: blue
 }
 
 
@@ -119,7 +120,7 @@ class SyntheticRogueDataset(IterableDataset):
         self.items_per_epoch = items_per_epoch
 
     # Direction deltas (dx, dy) in (Up, Down, Left, Right) order.
-    _DIRS = [(0, -1), (0, 1), (-1, 0), (1, 0)]
+    _DIRS: ClassVar[list[tuple[int, int]]] = [(0, -1), (0, 1), (-1, 0), (1, 0)]
 
     def _make_state(self, rng: np.random.Generator) -> _SyntheticState:
         n = self.board_size
@@ -170,7 +171,7 @@ class SyntheticRogueDataset(IterableDataset):
         new_food = state.food - 1
         new_level = state.level
 
-        if cell == -1 or cell == 3:
+        if cell in (-1, 3):
             # bumped a wall or obstacle: stay in place
             board[py, px] = 5
             nx, ny = px, py
@@ -271,8 +272,8 @@ class VectorJsonlDataset(Dataset):
 
         episodes: dict[int, list[dict]] = {}
         with self.path.open() as fh:
-            for line in fh:
-                line = line.strip()
+            for raw_line in fh:
+                line = raw_line.strip()
                 if not line:
                     continue
                 try:
@@ -298,9 +299,7 @@ class VectorJsonlDataset(Dataset):
     def _pull_obs(self, rec: dict, key: str) -> np.ndarray:
         arr = np.asarray(rec.get(key, []), dtype=np.float32)
         if arr.shape != (self.observation_size,):
-            raise ValueError(
-                f"{key} expected length {self.observation_size}, got {arr.shape}"
-            )
+            raise ValueError(f"{key} expected length {self.observation_size}, got {arr.shape}")
         return arr
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
@@ -379,8 +378,8 @@ class BoardJsonlDataset(Dataset):
 
         episodes: dict[int, list[dict]] = {}
         with self.path.open() as fh:
-            for line in fh:
-                line = line.strip()
+            for raw_line in fh:
+                line = raw_line.strip()
                 if not line:
                     continue
                 try:
@@ -414,9 +413,7 @@ class BoardJsonlDataset(Dataset):
             raise ValueError(f"missing board_width/board_height on record {rec.get('step')}")
         flat = rec.get(key, [])
         if len(flat) != w * h:
-            raise ValueError(
-                f"{key} length {len(flat)} != board_width({w}) * board_height({h})"
-            )
+            raise ValueError(f"{key} length {len(flat)} != board_width({w}) * board_height({h})")
         return np.asarray(flat, dtype=np.int32).reshape(h, w)
 
     def _render(self, rec: dict, key: str) -> np.ndarray:

@@ -124,9 +124,7 @@ class JEPA(nn.Module):
     def encode_actions(self, action: torch.Tensor) -> torch.Tensor:
         """Encode ``(B, T, action_dim)`` actions to ``(B, T, embed_dim)``."""
         if action.size(-1) != self.action_dim:
-            raise ValueError(
-                f"expected action_dim={self.action_dim}, got {action.size(-1)}"
-            )
+            raise ValueError(f"expected action_dim={self.action_dim}, got {action.size(-1)}")
         return self.action_encoder(action)
 
     def predict_next(self, emb: torch.Tensor, act_emb: torch.Tensor) -> torch.Tensor:
@@ -263,9 +261,7 @@ class JEPA(nn.Module):
         Higher is better. Used by :mod:`tools.lewm.train` to evaluate
         rollouts and (after M5) by ``BrainPlanner`` to pick actions.
         """
-        _, reward_pred, done_prob = self.rollout(
-            current_obs, action_sequence, history=history
-        )
+        _, reward_pred, done_prob = self.rollout(current_obs, action_sequence, history=history)
         h = reward_pred.size(-1)
         discounts = torch.tensor(
             [discount**t for t in range(h)],

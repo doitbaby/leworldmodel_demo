@@ -1,0 +1,7 @@
+# Developer-only tooling for the tools/lewm/ port.
+# Runtime dependencies live in tools/lewm/requirements.txt; this file
+# adds the linter + pre-commit harness used by .github/workflows/python.yml
+# and .pre-commit-config.yaml (M7).
+
+ruff==0.6.9
+pre-commit>=3.7

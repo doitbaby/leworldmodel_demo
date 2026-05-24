@@ -1,0 +1,50 @@
+# Pre-commit hooks for leworldmodel_demo (M7).
+#
+# Install once with::
+#
+#     source .venv_lewm/bin/activate
+#     pip install -r tools/lewm/requirements-dev.txt
+#     pre-commit install
+#
+# After installation, hooks run automatically on ``git commit``. To run
+# against every tracked file in one shot::
+#
+#     pre-commit run --all-files
+#
+# Only the Python toolchain under ``tools/`` is linted -- the Unity C# /
+# .unity scene assets are intentionally out of scope (they are edited
+# inside the Unity Editor and follow Unity's own conventions).
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      # Hygiene hooks are intentionally scoped tight: they ONLY run on the
+      # Python toolchain and the M7 project-config files. Unity assets
+      # (``Assets/`` ``.meta`` / ``.unity`` / ``.prefab`` / ``.controller``
+      # / ``.asset`` / ``.aseprite``...), the auto-generated
+      # ``UIElementsSchema/*.xsd``, and the ``Packages/`` / ``ProjectSettings/``
+      # trees are managed by the Unity Editor and must not be reformatted by
+      # this hook (Unity rewrites them with its own conventions on import).
+      - id: trailing-whitespace
+        # Markdown files use trailing whitespace for hard line-breaks.
+        args: [--markdown-linebreak-ext=md]
+        files: ^(tools/lewm/.*\.py|tools/lewm/requirements.*\.txt|pyproject\.toml|\.pre-commit-config\.yaml|\.github/workflows/.*\.ya?ml)$
+      - id: end-of-file-fixer
+        files: ^(tools/lewm/.*\.py|tools/lewm/requirements.*\.txt|pyproject\.toml|\.pre-commit-config\.yaml|\.github/workflows/.*\.ya?ml)$
+      - id: check-yaml
+        files: ^(\.pre-commit-config\.yaml|\.github/workflows/.*\.ya?ml)$
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=2048]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        name: ruff (lint tools/lewm/)
+        args: [--fix]
+        files: ^tools/lewm/.*\.py$
+      - id: ruff-format
+        name: ruff-format (tools/lewm/)
+        files: ^tools/lewm/.*\.py$
