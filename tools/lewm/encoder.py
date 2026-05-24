@@ -82,7 +82,5 @@ class VectorEncoder(nn.Module):
 
     def forward(self, obs: torch.Tensor) -> torch.Tensor:
         if obs.ndim != 2 or obs.size(-1) != self.input_dim:
-            raise ValueError(
-                f"expected (B, {self.input_dim}), got shape {tuple(obs.shape)}"
-            )
+            raise ValueError(f"expected (B, {self.input_dim}), got shape {tuple(obs.shape)}")
         return self.net(obs.float())

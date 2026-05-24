@@ -47,7 +47,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import json
 import math
 import os
 import time
@@ -110,7 +109,7 @@ def _bfs_next_step(board: np.ndarray, start: tuple[int, int]) -> int | None:
             # Walkable into: empty, food, player (start). Block walls /
             # obstacles / enemies / the exit itself (we already came
             # from there). The start tile may carry the player code 5.
-            if cell == -1 or cell == 2 or cell == 3:
+            if cell in (-1, 2, 3):
                 continue
             prev[(nx, ny)] = (cx, cy)
             if (nx, ny) == (sx, sy):
@@ -321,7 +320,6 @@ def _run_episode(
         action = mode(env, obs, rng)
 
         prev_pixels = obs.pixels
-        prev_board = obs.board
         next_obs, reward, done, info = env.step(action)
         episode_return += float(reward)
         if info.get("level_cleared", False):
@@ -334,13 +332,7 @@ def _run_episode(
             # JEPA cannot predict an unseen board.
             if not info.get("level_cleared", False):
                 with torch.no_grad():
-                    p0 = (
-                        torch.from_numpy(prev_pixels)
-                        .float()
-                        .unsqueeze(0)
-                        .unsqueeze(0)
-                        .to(device)
-                    )
+                    p0 = torch.from_numpy(prev_pixels).float().unsqueeze(0).unsqueeze(0).to(device)
                     p1 = (
                         torch.from_numpy(next_obs.pixels)
                         .float()
@@ -357,9 +349,7 @@ def _run_episode(
                     emb_next = model.encode_obs(p1)
                     act_emb = model.encode_actions(one_hot)
                     pred_emb = model.predict_next(emb_ctx, act_emb)
-                    dyn_mse = float(
-                        torch.mean((pred_emb[:, -1:] - emb_next[:, -1:]) ** 2).item()
-                    )
+                    dyn_mse = float(torch.mean((pred_emb[:, -1:] - emb_next[:, -1:]) ** 2).item())
                     reward_pred = model.reward_head(pred_emb, act_emb)
                     rew_mse = float(
                         torch.mean((reward_pred - torch.tensor(reward, device=device)) ** 2).item()
@@ -499,9 +489,7 @@ def run_benchmark(cfg: BenchmarkConfig) -> list[EpisodeResult]:
         # Each mode gets its own RNG stream so the per-mode comparison
         # at a fixed --seed is reproducible (independent of which other
         # modes were enabled in the same run).
-        mode_rng = np.random.default_rng(
-            int(rng_master.integers(0, 2**31 - 1))
-        )
+        mode_rng = np.random.default_rng(int(rng_master.integers(0, 2**31 - 1)))
         t0 = time.time()
         for ep in range(cfg.episodes):
             result = _run_episode(
@@ -516,10 +504,7 @@ def run_benchmark(cfg: BenchmarkConfig) -> list[EpisodeResult]:
             )
             results.append(result)
         dt = time.time() - t0
-        print(
-            f"mode={runner.name:<16s} episodes={cfg.episodes:>3d} "
-            f"elapsed={dt:.2f}s"
-        )
+        print(f"mode={runner.name:<16s} episodes={cfg.episodes:>3d} " f"elapsed={dt:.2f}s")
 
     _write_per_episode_csv(cfg.output_csv, results)
     _write_summary_csv(cfg.output_csv.with_suffix(".summary.csv"), results)

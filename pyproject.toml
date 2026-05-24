@@ -1,0 +1,78 @@
+# Tool configuration for the leworldmodel_demo Python tree.
+#
+# This project is a Unity game that ships two small Python toolchains:
+#  * tools/lewm/        -- the LeWorldModel port (M1..M7 in tools/lewm/README.md)
+#  * tools/world_model/ -- the legacy MLP world-model trainer for the live demo
+#
+# There is intentionally no top-level ``[project]`` table because we do not
+# publish a wheel; the file only exists to host shared ``ruff`` config so the
+# linter, pre-commit, and CI all see the same rules.
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+# Only the LeWM port is linted in M7. The legacy ``tools/world_model/`` MLP
+# trainer predates the lint config and is intentionally out of scope here;
+# touching it risks the live demo's checkpoint format. M0 (see
+# ``docs/research/lewm-port-analysis.md``) committed only to
+# ``ruff check tools/lewm/``.
+extend-exclude = [
+    ".venv_lewm",
+    ".venv_mla",
+    "results",
+    "Library",
+    "Temp",
+    "Logs",
+    "UserSettings",
+    "tools/world_model",
+]
+
+[tool.ruff.lint]
+# Stay narrow on purpose: enable the cheap, high-signal rule sets and skip
+# the opinionated ones until the codebase is ready for them.
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "W",   # pycodestyle warnings
+    "I",   # isort
+    "B",   # flake8-bugbear (likely bugs)
+    "UP",  # pyupgrade (modern syntax)
+    "PL",  # pylint subset
+    "RUF", # ruff-specific
+]
+ignore = [
+    # The vendored upstream module.py uses single-letter variable names that
+    # match the LeWorldModel paper / upstream source verbatim; renaming them
+    # would diverge from upstream.
+    "E741",
+    # PL rule families that fire heavily on perfectly readable scientific
+    # code and would force premature decomposition.
+    "PLR0912",  # too many branches
+    "PLR0913",  # too many arguments
+    "PLR0915",  # too many statements
+    "PLR2004",  # magic value comparisons (frequent in tests and config)
+    "PLR0911",  # too many return statements
+    # Allow ``range(len(...))`` -- tests use it deliberately for index loops.
+    "B007",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# The vendored upstream sources are intentionally untouched -- never re-flag
+# style on code we copied verbatim from lucas-maes/le-wm with a header
+# pointing back at the upstream commit.
+"tools/lewm/module.py" = ["E", "F", "W", "I", "B", "UP", "PL", "RUF"]
+# Tests rely on long-ish assertion strings and module-level helper calls
+# that don't add value to lint.
+"tools/lewm/tests/*.py" = ["PLR0912", "PLR0915"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["tools"]
+
+[tool.ruff.format]
+# ``tools/lewm/module.py`` is vendored verbatim from
+# ``lucas-maes/le-wm@c8a4417`` and intentionally kept byte-identical to
+# upstream so cherry-picking future bug-fixes stays trivial.
+# ``ruff format`` would rewrap long lines / re-quote strings and divergent
+# from upstream; we exclude it from the formatter only (lint is still
+# silenced via ``per-file-ignores`` above).
+exclude = ["tools/lewm/module.py"]

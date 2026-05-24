@@ -26,7 +26,6 @@ import numpy as np
 
 from tools.lewm.data import BoardJsonlDataset, SyntheticRogueDataset
 
-
 BOARD_SIZE = 8
 IMAGE_SIZE = 32
 ACTION_DIM = 4
@@ -125,8 +124,7 @@ def main() -> int:
             f"done shape {tuple(sample['done'].shape)}",
         )
         _check(
-            sample["pixels"].min().item() >= 0.0
-            and sample["pixels"].max().item() <= 1.0,
+            sample["pixels"].min().item() >= 0.0 and sample["pixels"].max().item() <= 1.0,
             "pixels not in [0, 1]",
         )
         _check(

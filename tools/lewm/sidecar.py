@@ -60,7 +60,6 @@ from pydantic import BaseModel, Field
 from .data import render_board_to_pixels
 from .planner import random_shooting
 
-
 SERVICE_VERSION = "lewm.sidecar.v1"
 
 _LOG = logging.getLogger("lewm.sidecar")
@@ -160,8 +159,7 @@ def load_checkpoint(path: str, device: str = "cpu") -> None:
     schema = payload.get("schema")
     if schema != "lewm.port.checkpoint.v1":
         raise ValueError(
-            f"unsupported checkpoint schema {schema!r}, "
-            "expected 'lewm.port.checkpoint.v1'"
+            f"unsupported checkpoint schema {schema!r}, " "expected 'lewm.port.checkpoint.v1'"
         )
 
     # ``load_config_from_payload`` filters unknown fields, so M1/M3

@@ -34,7 +34,6 @@ from ..train import (
     main,
 )
 
-
 _SCHEMA_V3 = "rogue.transition.v3"
 
 

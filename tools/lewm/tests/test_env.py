@@ -140,7 +140,7 @@ def test_food_depletion_terminates_episode() -> None:
 
 def test_step_after_done_raises() -> None:
     env = RogueSimEnv(board_size=8, food_start=1, seed=6)
-    obs = env.reset()
+    env.reset()
     env.step(0)
     # Food was 1, now 0, env should be done.
     assert env.is_done

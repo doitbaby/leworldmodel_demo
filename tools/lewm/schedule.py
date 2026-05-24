@@ -20,7 +20,7 @@ without importing the full training loop.
 from __future__ import annotations
 
 import math
-from typing import Callable
+from collections.abc import Callable
 
 
 def cosine_warmup_lambda(
@@ -46,9 +46,7 @@ def cosine_warmup_lambda(
     if total_steps <= 0:
         raise ValueError(f"total_steps must be > 0, got {total_steps}")
     if warmup_steps >= total_steps:
-        raise ValueError(
-            f"warmup_steps={warmup_steps} must be < total_steps={total_steps}"
-        )
+        raise ValueError(f"warmup_steps={warmup_steps} must be < total_steps={total_steps}")
     if not 0.0 <= min_lr_ratio <= 1.0:
         raise ValueError(f"min_lr_ratio must be in [0, 1], got {min_lr_ratio}")
 

@@ -26,7 +26,7 @@ training; the env here is only for the offline comparison sweeps.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -53,7 +53,7 @@ class EnvObservation:
     step: int
     last_event: str = "init"  # 'move' | 'wall' | 'obstacle' | 'enemy' | 'food' | 'exit'
 
-    def copy(self) -> "EnvObservation":
+    def copy(self) -> EnvObservation:
         return EnvObservation(
             board=self.board.copy(),
             pixels=self.pixels.copy(),
@@ -165,9 +165,7 @@ class RogueSimEnv:
         if self._done:
             raise RuntimeError("step() called on terminated env; call reset() first")
         if not 0 <= action < len(_DIRS):
-            raise ValueError(
-                f"action must be in [0, {len(_DIRS)}), got {action}"
-            )
+            raise ValueError(f"action must be in [0, {len(_DIRS)}), got {action}")
 
         dx, dy = _DIRS[action]
         px, py = self._player
@@ -182,7 +180,7 @@ class RogueSimEnv:
 
         cell = int(self._board[ny, nx])
 
-        if cell == -1 or cell == 3:
+        if cell in (-1, 3):
             # Wall or obstacle: bump and stay.
             self._board[py, px] = 5
             reward += self.cfg.bump_penalty
@@ -191,9 +189,7 @@ class RogueSimEnv:
             # Exit: regenerate board, increment level, top food up.
             reward += self.cfg.exit_reward
             self._level += 1
-            self._food = min(
-                self.cfg.food_start, self._food + self.cfg.food_per_level
-            )
+            self._food = min(self.cfg.food_start, self._food + self.cfg.food_per_level)
             info["level_cleared"] = True
             event = "exit"
             # Spawning a new board also overwrites _player and the
@@ -263,9 +259,7 @@ class RogueSimEnv:
         board[:, 0] = -1
         board[:, -1] = -1
 
-        interior = [
-            (x, y) for x in range(1, n - 1) for y in range(1, n - 1)
-        ]
+        interior = [(x, y) for x in range(1, n - 1) for y in range(1, n - 1)]
         self._rng.shuffle(interior)
 
         def take() -> tuple[int, int]:
@@ -296,9 +290,7 @@ class RogueSimEnv:
             board[y, x] = 4
 
         if not interior:
-            raise RuntimeError(
-                "board too small: no free cells left for the player spawn"
-            )
+            raise RuntimeError("board too small: no free cells left for the player spawn")
         px, py = take()
         board[py, px] = 5
         self._board = board

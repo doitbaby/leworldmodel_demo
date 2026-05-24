@@ -41,9 +41,10 @@ import json
 import math
 import os
 import time
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import numpy as np
 import torch
@@ -59,7 +60,6 @@ from .encoder import TinyConvEncoder, VectorEncoder
 from .jepa import JEPA
 from .module import MLP, ARPredictor, Embedder, SIGReg
 from .schedule import constant_lambda, cosine_warmup_lambda
-
 
 _CHECKPOINT_SCHEMA = "lewm.port.checkpoint.v1"
 _METRICS_JSON_SCHEMA = "lewm.port.metrics.v1"
@@ -466,9 +466,7 @@ def train_loop(
         last_lr = cfg.learning_rate
 
         for batch in train_loader:
-            loss, metrics = _forward_losses(
-                model, sigreg, batch, cfg, device, obs_key
-            )
+            loss, metrics = _forward_losses(model, sigreg, batch, cfg, device, obs_key)
 
             optim.zero_grad()
             loss.backward()
@@ -678,10 +676,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--lr-schedule",
         choices=["none", "cosine"],
         default=None,
-        help=(
-            "LR schedule. Defaults to 'cosine' for non-smoke runs and 'none' "
-            "for --smoke."
-        ),
+        help=("LR schedule. Defaults to 'cosine' for non-smoke runs and 'none' " "for --smoke."),
     )
     p.add_argument(
         "--warmup-steps",
@@ -751,9 +746,7 @@ def _resolve_defaults(args: argparse.Namespace) -> None:
         args.lr_schedule = "cosine"
     if args.warmup_steps is None:
         # 5 % of total steps as a safe default.
-        approx_total = args.epochs * max(
-            1, args.items_per_epoch // max(1, args.batch_size)
-        )
+        approx_total = args.epochs * max(1, args.items_per_epoch // max(1, args.batch_size))
         args.warmup_steps = max(0, int(0.05 * approx_total))
 
 
@@ -796,16 +789,10 @@ def main(argv: list[str] | None = None) -> int:
     model = build_model(cfg).to(device)
     sigreg = SIGReg(knots=cfg.sigreg_knots, num_proj=cfg.sigreg_num_proj).to(device)
 
-    train_loader, val_loader, obs_key = build_dataloaders(
-        cfg, args.jsonl_path, args.num_workers
-    )
+    train_loader, val_loader, obs_key = build_dataloaders(cfg, args.jsonl_path, args.num_workers)
 
     metrics_csv = Path(args.metrics_csv) if args.metrics_csv else None
-    best_output = (
-        Path(args.best_output)
-        if (val_loader is not None and args.best_output)
-        else None
-    )
+    best_output = Path(args.best_output) if (val_loader is not None and args.best_output) else None
     final_output = Path(args.output)
 
     train_loop(

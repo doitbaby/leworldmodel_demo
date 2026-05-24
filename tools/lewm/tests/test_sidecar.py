@@ -23,7 +23,6 @@ from pathlib import Path
 import numpy as np
 from fastapi.testclient import TestClient
 
-
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -190,7 +189,8 @@ def main() -> int:
                 f"/plan_actions best_actions length {plan}",
             )
             _check(
-                plan["top_k"] == 3, f"/plan_actions top_k {plan}",
+                plan["top_k"] == 3,
+                f"/plan_actions top_k {plan}",
             )
             _check(
                 len(plan["top_k_scores"]) == plan["top_k"],
@@ -212,8 +212,7 @@ def main() -> int:
                 )
             # best_actions equals the first row of top_k_actions_flat
             _check(
-                plan["best_actions"]
-                == plan["top_k_actions_flat"][:horizon],
+                plan["best_actions"] == plan["top_k_actions_flat"][:horizon],
                 f"/plan_actions best_actions vs top_k_actions_flat row 0 mismatch: {plan}",
             )
 
@@ -223,11 +222,17 @@ def main() -> int:
             plan2 = r2.json()
             _check(
                 plan2["best_actions"] == plan["best_actions"],
-                f"/plan_actions determinism: best_actions differ\n  a={plan['best_actions']}\n  b={plan2['best_actions']}",
+                (
+                    "/plan_actions determinism: best_actions differ\n"
+                    f"  a={plan['best_actions']}\n  b={plan2['best_actions']}"
+                ),
             )
             _check(
                 abs(plan2["best_score"] - plan["best_score"]) < 1e-5,
-                f"/plan_actions determinism: best_score {plan['best_score']} vs {plan2['best_score']}",
+                (
+                    "/plan_actions determinism: best_score "
+                    f"{plan['best_score']} vs {plan2['best_score']}"
+                ),
             )
 
             # Bad payload: board_state length mismatch.

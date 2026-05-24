@@ -68,7 +68,7 @@ def _make_board(size: int = 8) -> np.ndarray:
 def main() -> int:
     from tools.lewm.data import render_board_to_pixels
     from tools.lewm.planner import random_shooting
-    from tools.lewm.sidecar import load_checkpoint, get_state
+    from tools.lewm.sidecar import get_state, load_checkpoint
 
     with tempfile.TemporaryDirectory() as tmp:
         ckpt = Path(tmp) / "checkpoint.pt"
@@ -116,7 +116,10 @@ def main() -> int:
         )
         _check(
             len(plan.top_k_actions) == len(plan.top_k_scores) == 5,
-            f"top_k length mismatch: actions={len(plan.top_k_actions)} scores={len(plan.top_k_scores)}",
+            (
+                "top_k length mismatch: "
+                f"actions={len(plan.top_k_actions)} scores={len(plan.top_k_scores)}"
+            ),
         )
         _check(
             plan.top_k_actions[0] == plan.best_actions,
@@ -148,7 +151,10 @@ def main() -> int:
         )
         _check(
             plan.best_actions == plan_again.best_actions,
-            f"determinism: best_actions differ\n  a={plan.best_actions}\n  b={plan_again.best_actions}",
+            (
+                "determinism: best_actions differ\n"
+                f"  a={plan.best_actions}\n  b={plan_again.best_actions}"
+            ),
         )
         _check(
             abs(plan.best_score - plan_again.best_score) < 1e-6,
@@ -173,8 +179,7 @@ def main() -> int:
             include_sequences=None,
         )
         _check(
-            len(plan_other.best_actions) == horizon
-            and len(plan_other.top_k_scores) == 5,
+            len(plan_other.best_actions) == horizon and len(plan_other.top_k_scores) == 5,
             f"different-seed plan shape unexpected: {plan_other}",
         )
 
