@@ -18,8 +18,8 @@ this README is the day-to-day usage guide.
 | M2 — Unity pixel observation builder + JSONL v3 | #2 | landed. |
 | M3 — Python inference sidecar | #4 | landed (sidecar + CLI + Unity client). |
 | M4 — training pipeline (LR schedule + val split + metrics CSV + best-ckpt) | #5 | landed. |
-| M5 — Dreamer-style actor on imagined rollouts | this PR | landed. |
-| M6 — benchmark harness | TBD | not started. |
+| M5 — Dreamer-style actor on imagined rollouts | #6 | landed. |
+| M6 — benchmark harness (5-mode comparison + CSV metrics) | this PR | landed. |
 | M7 — CI + pre-commit | TBD | not started. |
 
 ## Layout
@@ -36,11 +36,15 @@ tools/lewm/
 ├── planner.py    # random-shooting actor over JEPA rollouts (M5)
 ├── sidecar.py    # FastAPI app wrapping JEPA inference + planning (M3+M5)
 ├── serve.py      # CLI: load checkpoint and boot uvicorn (M3)
+├── env.py        # python-side rogue env mirroring Unity rules (M6)
+├── benchmark.py  # multi-mode evaluation CLI emitting per-episode + summary CSVs (M6)
 ├── tests/
 │   ├── test_board_jsonl.py        # round-trip check for the v3 board JSONL path
 │   ├── test_sidecar.py            # in-process TestClient integration (incl. /plan_actions)
 │   ├── test_training_pipeline.py  # M4 end-to-end (train → metrics CSV → best.pt → sidecar)
-│   └── test_planner.py            # M5 random-shooting actor unit test
+│   ├── test_planner.py            # M5 random-shooting actor unit test
+│   ├── test_env.py                # M6 RogueSimEnv step-dynamics smoke (9 cases)
+│   └── test_benchmark.py          # M6 benchmark CLI smoke across all 5 modes (6 cases)
 ├── requirements.txt
 └── README.md     # you are here
 ```
@@ -318,9 +322,66 @@ plan = random_shooting(
 print(plan.best_actions, plan.best_score)
 ```
 
+## Benchmark harness (M6)
+
+M6 ships a CLI that evaluates several planners against a small
+rogue-style env that mirrors the Unity game's cell-code grid and step
+dynamics (see [`env.py`](env.py)). The benchmark writes a per-episode
+CSV plus a `<name>.summary.csv` companion with per-mode aggregates.
+
+Five modes are exposed via `--modes`:
+
+| Mode | Picks actions via | Notes |
+| --- | --- | --- |
+| `random` | uniform random | baseline floor. |
+| `mission` | BFS toward the exit + enemy-adjacency avoidance | mirrors the in-engine `BrainPlanner.ChooseMissionTarget` heuristic with no learned model. |
+| `mlp_lite` | `mission` + adjacent-food preference when `Assets/StreamingAssets/world_model_weights.json` exists | surrogate for the in-engine LeWM-lite path. The real MLP needs the 31-d vector observation only Unity builds, so this surrogate uses the same scaffolding but rule-based action selection. |
+| `lewm_no_planner` | 1-step JEPA argmax (no rollout) | requires `--checkpoint`. |
+| `lewm_dreamer` | M5 random-shooting actor over JEPA rollouts | requires `--checkpoint`. |
+
+Smoke run (one episode of every mode, ~10s on CPU):
+
+```bash
+python -m tools.lewm.train --smoke                              # produces results/lewm/checkpoint.pt
+python -m tools.lewm.benchmark --smoke \
+    --checkpoint results/lewm/checkpoint.pt \
+    --output-csv results/lewm/benchmark.csv
+```
+
+Longer run (5 episodes per mode, full max-steps budget):
+
+```bash
+python -m tools.lewm.benchmark \
+    --episodes 5 --max-steps 200 --seed 0 \
+    --checkpoint results/lewm/best.pt \
+    --modes random mission mlp_lite lewm_no_planner lewm_dreamer \
+    --output-csv results/lewm/benchmark.csv
+```
+
+Per-episode CSV columns (`results/lewm/benchmark.csv`):
+
+```
+seed, mode, episode_idx, levels_cleared, food_left, steps,
+episode_return, dynamics_loss, reward_loss, died
+```
+
+Summary CSV columns (`results/lewm/benchmark.summary.csv`):
+
+```
+seed, mode, episodes, mean_levels_cleared, mean_food_left, mean_steps,
+mean_episode_return, mean_dynamics_loss, mean_reward_loss,
+death_rate, std_episode_return
+```
+
+`dynamics_loss` and `reward_loss` are recorded whenever a JEPA
+checkpoint is loaded (so even `random` / `mission` rows get a finite
+model-prediction error against the trajectories *those* policies
+traced out). When the benchmark runs without `--checkpoint`, only the
+three non-JEPA modes can be requested and the loss columns are `nan`.
+
 ## Verification
 
-Five cheap checks cover the LeWM port end-to-end without GPU or Unity:
+Eight cheap checks cover the LeWM port end-to-end without GPU or Unity:
 
 ```bash
 python -m tools.lewm.train --smoke                       # synthetic smoke training
@@ -328,6 +389,9 @@ python -m tools.lewm.tests.test_board_jsonl              # v3 JSONL round-trip
 python -m tools.lewm.tests.test_sidecar                  # FastAPI sidecar integration (incl. /plan_actions)
 python -m tools.lewm.tests.test_training_pipeline        # M4 full pipeline
 python -m tools.lewm.tests.test_planner                  # M5 random-shooting actor unit test
+python -m tools.lewm.tests.test_env                      # M6 RogueSimEnv step-dynamics smoke
+python -m tools.lewm.tests.test_benchmark                # M6 benchmark CLI smoke
+python tools/world_model/train_world_model.py --smoke --epochs 2  # legacy MLP path stays untouched
 ```
 
 The smoke train exercises encoder, Embedder, ARPredictor, RewardHead,
@@ -344,6 +408,14 @@ through the sidecar's `load_checkpoint`. The M5 planner test trains a
 smoke checkpoint and asserts that random shooting (1) returns a sorted
 top-k with the best plan at index 0, (2) is deterministic at a fixed
 seed, and (3) honours the optional `include_sequences` forcing path.
+The M6 env test covers the cell-code conventions, wall bumps, food
+pickup, exit transitions (which regenerate the board), starvation,
+and max-step termination. The M6 benchmark test trains a smoke
+checkpoint, runs all five modes for one episode each, and asserts the
+per-episode CSV header, the summary CSV header, finite `dynamics_loss`
+when a checkpoint is loaded, and the expected error paths
+(`ValueError` when JEPA mode is requested without a checkpoint,
+`FileNotFoundError` for a missing checkpoint path).
 
 The existing `tools/world_model/train_world_model.py` MLP path is untouched
 and continues to support the live Unity demo.
