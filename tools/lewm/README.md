@@ -20,7 +20,8 @@ this README is the day-to-day usage guide.
 | M4 — training pipeline (LR schedule + val split + metrics CSV + best-ckpt) | #5 | landed. |
 | M5 — Dreamer-style actor on imagined rollouts | #6 | landed. |
 | M6 — benchmark harness (5-mode comparison + CSV metrics) | #7 | landed. |
-| M7 — GitHub Actions CI + pre-commit + ruff | this PR | landed. |
+| M7 — GitHub Actions CI + pre-commit + ruff | #8 | landed. |
+| M8b — FPT AI Factory one-shot training script | this PR | landed (see [Cloud training on FPT AI Factory (M8b)](#cloud-training-on-fpt-ai-factory-m8b)). |
 
 ## Layout
 
@@ -378,6 +379,62 @@ checkpoint is loaded (so even `random` / `mission` rows get a finite
 model-prediction error against the trajectories *those* policies
 traced out). When the benchmark runs without `--checkpoint`, only the
 three non-JEPA modes can be requested and the loss columns are `nan`.
+
+## Cloud training on FPT AI Factory (M8b)
+
+The full architecture plan for renting an FPT AI Factory H100 lives in
+[`docs/research/lewm-fpt-aifactory-plan.md`](../../docs/research/lewm-fpt-aifactory-plan.md).
+M8b ships the one-shot wrapper script the plan calls for, so a fresh
+AI Notebook can go from `git clone` to a downloadable `best.pt` with a
+single command:
+
+```bash
+# inside an FPT AI Notebook / GPU Container / GPU VM (Ubuntu, 1x H100)
+git clone https://github.com/doitbaby/leworldmodel_demo.git
+cd leworldmodel_demo
+bash tools/lewm/scripts/train_fpt_h100.sh /workspace/rogue_transitions.jsonl
+```
+
+The script:
+
+1. `pip install`s `tools/lewm/requirements.txt` (idempotent).
+2. Imports `torch`, asserts `torch.cuda.is_available()` and prints the
+   detected GPU name — refuses to run on CPU when `DEVICE=cuda` (the
+   default) so a misinstalled wheel cannot silently burn GPU budget at
+   1/50th speed.
+3. Runs a 2-epoch synthetic smoke (`python -m tools.lewm.train --smoke`)
+   to validate the CUDA stack before touching real data.
+4. Runs the full M4 training command with cosine LR + 10 % val split +
+   per-epoch metrics CSV + best-checkpoint tracking, writing
+   `results/lewm/{metrics.csv, checkpoint.pt, best.pt}`.
+5. Runs the M6 5-mode benchmark against `best.pt` and prints the
+   summary CSV inline so the FPT terminal log is enough to tell whether
+   `lewm_dreamer` beats `mission` beats `random`.
+
+Everything is configurable via env vars; the defaults match the
+recommended FPT recipe in the architecture plan:
+
+```bash
+EPOCHS=30 BATCH_SIZE=128 VAL_SPLIT=0.1 WARMUP_STEPS=200 MIN_LR_RATIO=0.05 \
+BENCHMARK_EPISODES=20 BENCHMARK_MAX_STEPS=200 SEED=0 \
+DEVICE=cuda OUTPUT_DIR=results/lewm \
+bash tools/lewm/scripts/train_fpt_h100.sh /workspace/rogue_transitions.jsonl
+```
+
+Pass `--synthetic` as the positional arg to exercise only the smoke
+step (useful while still waiting on Unity gameplay JSONL). Set
+`ARCHIVE=1` to also tar up `OUTPUT_DIR` into
+`lewm-artifacts-<timestamp>.tar.gz` for one-click download from the
+Jupyter UI.
+
+Set `SKIP_SMOKE=1` to skip step 1 once you trust the GPU stack, or
+`SKIP_BENCHMARK=1` to run training only.
+
+Cost reference (FPT AI Notebook, 1× H100 @ $2.31/hour, billed
+per-second): the happy-path full pipeline (smoke + 30-epoch train +
+5-mode benchmark on a 5–10k-transition JSONL) lands at roughly
+**$2 USD / ~20 min wall clock**. The full $100 budget covers ~40 H100
+hours, enough room for ~5–10 hyperparameter sweeps.
 
 ## Verification
 
