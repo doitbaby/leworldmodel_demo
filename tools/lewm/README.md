@@ -39,8 +39,12 @@ tools/lewm/
 ├── serve.py      # CLI: load checkpoint and boot uvicorn (M3)
 ├── env.py        # python-side rogue env mirroring Unity rules (M6)
 ├── benchmark.py  # multi-mode evaluation CLI emitting per-episode + summary CSVs (M6)
+├── scripts/
+│   ├── generate_jsonl_v3.py       # synthesise v3 JSONL without Unity (mission + random mix)
+│   └── train_fpt_h100.sh          # FPT AI Factory one-shot training + benchmark wrapper
 ├── tests/
 │   ├── test_board_jsonl.py        # round-trip check for the v3 board JSONL path
+│   ├── test_generate_jsonl_v3.py  # generator → BoardJsonlDataset round-trip smoke
 │   ├── test_sidecar.py            # in-process TestClient integration (incl. /plan_actions)
 │   ├── test_training_pipeline.py  # M4 end-to-end (train → metrics CSV → best.pt → sidecar)
 │   ├── test_planner.py            # M5 random-shooting actor unit test
@@ -146,6 +150,33 @@ To sanity-check the v3 schema without Unity:
 python -m tools.lewm.tests.test_board_jsonl
 # OK: BoardJsonlDataset round-trip passed.
 ```
+
+### Generating v3 JSONL without Unity (cloud GPU notebooks)
+
+When Unity is not available — cloud Jupyter notebooks (Kaggle, FPT AI
+Factory, Colab), headless CI, fast iteration on the port —
+`tools.lewm.scripts.generate_jsonl_v3` synthesises the same
+`rogue.transition.v3` shape from the Python surrogate
+`tools.lewm.env.RogueSimEnv`. Two policies are mixed: BFS-toward-exit
+("mission") plus uniform random, so the JEPA learns dynamics across
+the whole state-action grid rather than collapsing onto one trajectory:
+
+```bash
+python -m tools.lewm.scripts.generate_jsonl_v3 \
+    --output data/rogue_transitions_v3.jsonl \
+    --num-transitions 6000 \
+    --mission-ratio 0.7 \
+    --epsilon 0.1 \
+    --seed 0 \
+    --verify
+```
+
+`--verify` reloads the output with `BoardJsonlDataset` and prints
+tensor shapes; useful as a one-line sanity check before kicking off a
+multi-hour cloud training run. The file format is identical to what
+`RogueTransitionRecorder.cs` writes, so the resulting JSONL drops
+straight into the `--observation-mode board-jsonl` training command
+above.
 
 ## Architecture summary
 

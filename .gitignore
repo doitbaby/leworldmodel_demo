@@ -74,6 +74,9 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 
+# Generated training data (rogue.transition.v3 JSONL, etc.)
+/data/
+
 # Packed Addressables
 /[Aa]ssets/[Aa]ddressable[Aa]ssets[Dd]ata/*/*.bin*
 
