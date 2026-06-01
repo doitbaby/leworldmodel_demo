@@ -82,8 +82,16 @@ def analyze_sessions(input_dir: str, output: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Analyze coach session JSONL files.")
-    parser.add_argument("--input-dir", default="coach_sessions", help="Folder with session_*.jsonl files")
-    parser.add_argument("--output", default="results/coach_analysis.csv", help="Output CSV path")
+    parser.add_argument(
+        "--input-dir",
+        default="coach_sessions",
+        help="Folder with session_*.jsonl files",
+    )
+    parser.add_argument(
+        "--output",
+        default="results/coach_analysis.csv",
+        help="Output CSV path",
+    )
     args = parser.parse_args()
     analyze_sessions(args.input_dir, args.output)
 
