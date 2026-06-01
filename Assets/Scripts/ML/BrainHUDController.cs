@@ -182,12 +182,12 @@ public class BrainHUDController : MonoBehaviour
 
         var label = new Label($"{score.actionName.ToUpperInvariant()}  reward {score.predictedReward:0.00}  future {score.rolloutScore:0.00}");
         label.style.color = Color.white;
-        label.style.fontSize = 11;
+        label.style.fontSize = 14;
         label.style.unityTextAlign = TextAnchor.MiddleLeft;
         row.Add(label);
 
         var barOuter = new VisualElement();
-        barOuter.style.height = 7;
+        barOuter.style.height = 9;
         barOuter.style.backgroundColor = new Color(1f, 1f, 1f, 0.18f);
         barOuter.style.marginTop = 4;
 
@@ -196,7 +196,7 @@ public class BrainHUDController : MonoBehaviour
             ? 50f
             : Mathf.Lerp(8f, 100f, Mathf.InverseLerp(minScore, maxScore, score.rolloutScore));
         barInner.style.width = Length.Percent(width);
-        barInner.style.height = 7;
+        barInner.style.height = 9;
         barInner.style.backgroundColor = score.selected
             ? new Color(0.45f, 0.95f, 0.48f, 1f)
             : new Color(0.38f, 0.65f, 0.95f, 0.9f);
@@ -209,7 +209,7 @@ public class BrainHUDController : MonoBehaviour
     {
         var label = new Label(text);
         label.style.color = Color.white;
-        label.style.fontSize = 11;
+        label.style.fontSize = 14;
         label.style.whiteSpace = WhiteSpace.Normal;
         label.style.marginBottom = 6;
         label.style.paddingLeft = 6;
@@ -247,10 +247,10 @@ public class BrainHUDController : MonoBehaviour
         }
 
         m_CoachModeBadge.text = "AI COACH";
-        m_CoachInstructionLabel.text = "M: HUMAN → COACH → AI";
+        m_CoachInstructionLabel.text = "M: HUMAN -> COACH -> AI";
         m_CoachSuggestionLabel.text = $"AI suggests: {data.suggestedActionName.ToUpperInvariant()}";
         m_CoachSuggestionLabel.style.color = new Color(0.55f, 1f, 0.45f, 1f);
-        m_CoachSuggestionLabel.style.fontSize = 13;
+        m_CoachSuggestionLabel.style.fontSize = 18;
         m_CoachComplianceLabel.text =
             $"Following AI: {data.sessionFollowedSteps}/{data.sessionTotalSteps} ({data.complianceRate:P0})";
         m_CoachRiskLabel.text = data.riskWarning;
