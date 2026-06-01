@@ -41,7 +41,10 @@ tools/lewm/
 ├── benchmark.py  # multi-mode evaluation CLI emitting per-episode + summary CSVs (M6)
 ├── scripts/
 │   ├── generate_jsonl_v3.py       # synthesise v3 JSONL without Unity (mission + random mix)
-│   └── train_fpt_h100.sh          # FPT AI Factory one-shot training + benchmark wrapper
+│   ├── train_fpt_h100.sh          # FPT AI Factory one-shot training + benchmark wrapper
+│   ├── ablation_sweep.py          # M9 four-way ablation orchestrator (FISAT rogue case study)
+│   ├── latent_visualize.py        # M9 latent-space PCA + per-frame label plots
+│   └── synthetic_anomaly.py       # M9 injected-glitch latent-surprise AUROC eval
 ├── tests/
 │   ├── test_board_jsonl.py        # round-trip check for the v3 board JSONL path
 │   ├── test_generate_jsonl_v3.py  # generator → BoardJsonlDataset round-trip smoke
@@ -49,7 +52,10 @@ tools/lewm/
 │   ├── test_training_pipeline.py  # M4 end-to-end (train → metrics CSV → best.pt → sidecar)
 │   ├── test_planner.py            # M5 random-shooting actor unit test
 │   ├── test_env.py                # M6 RogueSimEnv step-dynamics smoke (9 cases)
-│   └── test_benchmark.py          # M6 benchmark CLI smoke across all 5 modes (6 cases)
+│   ├── test_benchmark.py          # M6 benchmark CLI smoke across all 5 modes (6 cases)
+│   ├── test_ablation_sweep.py     # M9 dry-run orchestrator smoke
+│   ├── test_latent_visualize.py   # M9 PCA visualizer smoke (no plots)
+│   └── test_synthetic_anomaly.py  # M9 anomaly injection + AUROC smoke
 ├── requirements.txt
 └── README.md     # you are here
 ```
@@ -102,6 +108,115 @@ python -m tools.lewm.train \
 ```
 
 Vector mode is a useful sanity check while iterating on the LeWM losses.
+
+## M9 ablations and analysis (FISAT rogue case study)
+
+The M9 scripts under `tools/lewm/scripts/` add the FISAT 2026 deliverables
+for the rogue case study: an ablation sweep, a latent-space visualizer, and
+a synthetic-anomaly surprise-score evaluator. All three operate on a single
+`rogue.transition.v3` JSONL + an existing LeWM checkpoint, so they slot
+directly into the Kaggle workflow.
+
+### Action-conditioning ablation flag
+
+`train.py` accepts a new `--zero-actions` flag that replaces the one-hot
+action tensor with zeros at the dataloader boundary, leaving the predictor
+shape unchanged. It is the cleanest knob for measuring how much the JEPA
+predictor relies on action context. The flag is persisted in the saved
+`TrainConfig` so downstream tooling can identify the run.
+
+```bash
+python -m tools.lewm.train \
+    --observation-mode board-jsonl \
+    --jsonl-path data/rogue_transitions_v3.jsonl \
+    --epochs 60 --batch-size 128 \
+    --zero-actions \
+    --device cuda \
+    --output results/lewm/no_actions.pt
+```
+
+### Four-way ablation sweep
+
+`tools.lewm.scripts.ablation_sweep` runs the four configs the paper needs:
+`full`, `no_sigreg` (`--sigreg-weight 0`), `no_actions` (`--zero-actions`),
+and `encoder_only` (both disabled). It shells out to `python -m
+tools.lewm.train` so the exact same training code path is exercised in
+every cell; use `--dry-run` to preview the commands without launching
+train subprocesses.
+
+```bash
+python -m tools.lewm.scripts.ablation_sweep \
+    --jsonl /kaggle/input/datasets/<user>/lewm-rogue-jsonl-v3/rogue_transitions_v3.jsonl \
+    --output-dir /kaggle/working/ablations/ \
+    --epochs 60 --batch-size 128 --device cuda
+```
+
+Outputs (per ablation under `<output_dir>/<name>/`):
+
+- `checkpoint.pt` / `best.pt` -- the trained LeWM weights.
+- `metrics.csv` / `metrics.metrics.json` -- per-epoch loss curves.
+
+At the sweep root the script writes:
+
+- `summary.json` -- ablation specs + final-epoch metrics.
+- `summary.csv` -- one row per ablation for the paper's component-importance
+  table.
+
+### Latent-space PCA visualizer
+
+`tools.lewm.scripts.latent_visualize` encodes every `board_state` in a
+JSONL through the trained encoder, projects the embeddings to 2D via
+NumPy PCA (no sklearn), and saves coloured scatter plots for each label
+channel (`level`, `food`, `near_exit`, `near_enemy`, `action`). The raw
+embeddings are persisted to a `.npz` so any t-SNE / UMAP follow-up can be
+done offline without re-encoding.
+
+```bash
+python -m tools.lewm.scripts.latent_visualize \
+    --checkpoint results/lewm/lewm_best.pt \
+    --jsonl data/rogue_transitions_v3.jsonl \
+    --output-dir results/lewm/latent_viz/ \
+    --max-samples 4000
+```
+
+Outputs:
+
+- `embeddings.npz` -- raw `(N, embed_dim)` array + per-frame labels.
+- `projection.npz` -- the 2D PCA projection.
+- `pca_<label>.png` -- one scatter per coloured label.
+- `summary.json` -- record count, explained variance, label counts.
+
+### Synthetic-anomaly surprise evaluator
+
+`tools.lewm.scripts.synthetic_anomaly` rolls the JSONL through the
+trained model, then injects four anomaly types into the last board of
+each window (`teleport`, `spawn_enemy`, `wall_pass`, `food_vanish`) and
+compares the per-window **latent surprise score**
+`|| predict_next(...) - encode(next_obs) ||^2_2` against the normal
+baseline. It reports per-anomaly AUROC (computed in NumPy via the
+Mann-Whitney U statistic, no sklearn) and an optional histogram PNG.
+
+```bash
+python -m tools.lewm.scripts.synthetic_anomaly \
+    --checkpoint results/lewm/lewm_best.pt \
+    --jsonl data/rogue_transitions_v3.jsonl \
+    --output-dir results/lewm/anomaly/ \
+    --max-windows 1000
+```
+
+Outputs `anomaly_summary.json` with one row per anomaly
+(`auroc`, `normal_mean`/`std`, `anomaly_mean`/`std`, sample counts) plus
+`surprise_histogram.png` showing the four score distributions. This is the
+rogue-game stand-in for the World of Bugs paper-grade detector planned in
+phase B.
+
+### CI coverage
+
+All three M9 scripts have CPU smokes (smokes 9-11 of 12) in
+`.github/workflows/python.yml`, plus the existing M8c generator smoke
+(smoke 8). The smokes train a 2-epoch checkpoint and exercise the full
+load-and-evaluate path with `--no-plots` so matplotlib is invoked only by
+offline analysis, never on the train loop critical path.
 
 ## Pixel-mode training from Unity gameplay (v3 board JSONL)
 

@@ -96,6 +96,8 @@ class TrainConfig:
     min_lr_ratio: float = 0.0
     val_split: float = 0.0
     val_items_per_epoch: int = 0
+    # ---- M9 ablation knobs (defaulted off for backward compat) ----
+    zero_actions: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -368,6 +370,13 @@ def _forward_losses(
     action = batch["action"].to(device)
     reward = batch["reward"].to(device)
     done = batch["done"].to(device)
+
+    if cfg.zero_actions:
+        # Action-conditioning ablation: replace one-hot actions with
+        # all-zeros so the predictor cannot use action information.
+        # The action tensor must keep the same shape so the predictor
+        # still receives a valid action-embedding sequence.
+        action = torch.zeros_like(action)
 
     output = model.compute_losses(obs, action, reward, done)
     sigreg_loss = sigreg(output.embedding.transpose(0, 1))
@@ -654,6 +663,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--reward-loss-weight", type=float, default=1.0)
     p.add_argument("--done-loss-weight", type=float, default=1.0)
     p.add_argument(
+        "--zero-actions",
+        action="store_true",
+        help=(
+            "Action-conditioning ablation: replace one-hot actions with "
+            "zeros at the dataloader boundary so the predictor cannot use "
+            "action information. Recorded in TrainConfig so downstream "
+            "tooling can identify the run."
+        ),
+    )
+    p.add_argument(
         "--observation-mode",
         choices=["pixel", "vector", "board-jsonl"],
         default="pixel",
@@ -783,6 +802,7 @@ def main(argv: list[str] | None = None) -> int:
         min_lr_ratio=args.min_lr_ratio,
         val_split=args.val_split,
         val_items_per_epoch=args.val_items_per_epoch,
+        zero_actions=args.zero_actions,
     )
 
     device = torch.device(args.device)
