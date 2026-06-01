@@ -57,6 +57,7 @@ public class WorldModelPlannerAgent : MonoBehaviour
     private bool m_GameEventsBound;
     private bool m_PlayerEventsBound;
     private bool m_RunInitialized;
+    private bool m_CoachLogRunActive;
     private PendingTransition m_PendingTransition;
     private GameManager.RunEndedEvent m_PendingRunEndedEvent;
     private PlayerController m_BoundPlayerController;
@@ -80,7 +81,6 @@ public class WorldModelPlannerAgent : MonoBehaviour
     private void Start()
     {
         EnsureReferences();
-        EnsureCoachLogger();
         LoadModel();
         LoadMetrics();
 
@@ -120,7 +120,6 @@ public class WorldModelPlannerAgent : MonoBehaviour
     private void Update()
     {
         EnsureReferences();
-        EnsureCoachLogger();
         BindGameEvents();
         BindPlayerEvents();
         BindUi();
@@ -176,11 +175,13 @@ public class WorldModelPlannerAgent : MonoBehaviour
     {
         if (m_AgentMode == mode)
         {
+            Game?.SetDemoRunMode(mode);
             UpdateUi();
             return;
         }
 
         m_AgentMode = mode;
+        Game?.SetDemoRunMode(mode);
         InvalidateSidecarRequests();
 
         if (Game != null && Game.PlayerController != null)
@@ -203,6 +204,11 @@ public class WorldModelPlannerAgent : MonoBehaviour
         }
 
         m_NextDecisionTime = Time.time;
+        if (mode == AgentMode.CoachMode)
+        {
+            EnsureCoachLoggingSession();
+        }
+
         UpdateUi();
         PublishForCurrentMode();
     }
@@ -295,6 +301,7 @@ public class WorldModelPlannerAgent : MonoBehaviour
             suggestedActionName = "none",
             explanation = "Human-only mode active.",
             riskWarning = string.Empty,
+            riskLevel = "low",
             metrics = m_Metrics ?? BrainMetrics.Empty(),
         };
     }
@@ -340,6 +347,9 @@ public class WorldModelPlannerAgent : MonoBehaviour
         frame.riskWarning = string.IsNullOrWhiteSpace(frame.riskWarning)
             ? "Risk: waiting for suggestion."
             : frame.riskWarning;
+        frame.riskLevel = string.IsNullOrWhiteSpace(frame.riskLevel)
+            ? "blocked"
+            : frame.riskLevel;
         return frame;
     }
 
@@ -539,6 +549,19 @@ public class WorldModelPlannerAgent : MonoBehaviour
         }
     }
 
+    private void EnsureCoachLoggingSession()
+    {
+        if (m_CoachLogRunActive || Game == null || Game.CurrentLevel <= 0 || Game.IsGameOver)
+        {
+            return;
+        }
+
+        EnsureCoachLogger();
+        m_CoachLogger.NewSession();
+        m_CoachLogger.NewEpisode();
+        m_CoachLogRunActive = true;
+    }
+
     private void BindGameEvents()
     {
         if (m_GameEventsBound || Game == null)
@@ -603,12 +626,16 @@ public class WorldModelPlannerAgent : MonoBehaviour
     private void HandleRunStarted()
     {
         m_RunInitialized = true;
+        m_CoachLogRunActive = false;
         m_PendingRunEndedEvent = null;
         m_PendingTransition = null;
         InvalidateSidecarRequests();
         TransitionRecorder?.BeginEpisode();
-        m_CoachLogger?.NewSession();
-        m_CoachLogger?.NewEpisode();
+        if (m_AgentMode == AgentMode.CoachMode)
+        {
+            EnsureCoachLoggingSession();
+        }
+
         m_NextDecisionTime = Time.time;
         PublishForCurrentMode();
     }
@@ -626,10 +653,14 @@ public class WorldModelPlannerAgent : MonoBehaviour
             return;
         }
 
-        m_CoachLogger?.LogEpisodeEnd(
-            m_PendingRunEndedEvent.LevelsCleared,
-            m_PendingRunEndedEvent.Died,
-            m_PendingRunEndedEvent.FoodRemaining);
+        if (m_CoachLogRunActive)
+        {
+            m_CoachLogger?.LogEpisodeEnd(
+                m_PendingRunEndedEvent.LevelsCleared,
+                m_PendingRunEndedEvent.Died,
+                m_PendingRunEndedEvent.FoodRemaining);
+        }
+
         m_PendingRunEndedEvent = null;
     }
 
@@ -640,6 +671,7 @@ public class WorldModelPlannerAgent : MonoBehaviour
             return;
         }
 
+        EnsureCoachLoggingSession();
         var frame = GetCoachFrameForCurrentState();
         var scores = ExtractActionScores(frame);
         var snapshot = SnapshotPreStep();
@@ -647,6 +679,7 @@ public class WorldModelPlannerAgent : MonoBehaviour
         snapshot.mode = AgentMode.CoachMode;
         snapshot.suggestedAction = SelectedAction(frame);
         snapshot.actionScores = scores;
+        snapshot.riskLevel = BrainPlanner.RiskLevelForAction(Game, actionEvent.ActionIndex);
         snapshot.logCoachAnalytics = true;
         m_PendingTransition = snapshot;
         UpdateCoachFrame(frame);
@@ -953,6 +986,7 @@ public class WorldModelPlannerAgent : MonoBehaviour
             return;
         }
 
+        snapshot.riskLevel = BrainPlanner.RiskLevelForAction(Game, action);
         bool accepted = Game.PlayerController.TryStep(
             RogueObservationBuilder.ActionToDirection(action),
             smoothMovement: !InstantActions);
@@ -1038,6 +1072,13 @@ public class WorldModelPlannerAgent : MonoBehaviour
                 Game.CurrentLevel);
         }
 
+        Game.RecordDemoActionAttempt(
+            m_PendingTransition.mode,
+            m_PendingTransition.accepted,
+            followedAi: m_PendingTransition.suggestedAction == m_PendingTransition.action,
+            coachStep: m_PendingTransition.mode == AgentMode.CoachMode,
+            risky: IsRiskyLevel(m_PendingTransition.riskLevel));
+
         m_PendingTransition = null;
 
         if (m_AgentMode == AgentMode.CoachMode && !Game.IsGameOver)
@@ -1075,6 +1116,13 @@ public class WorldModelPlannerAgent : MonoBehaviour
         };
     }
 
+    private static bool IsRiskyLevel(string riskLevel)
+    {
+        return riskLevel == "medium"
+            || riskLevel == "high"
+            || riskLevel == "blocked";
+    }
+
     private static float[] CopyScores(float[] scores)
     {
         if (scores == null)
@@ -1101,6 +1149,7 @@ public class WorldModelPlannerAgent : MonoBehaviour
         public AgentMode mode;
         public int suggestedAction = -1;
         public float[] actionScores;
+        public string riskLevel = "low";
         public bool logCoachAnalytics;
     }
 

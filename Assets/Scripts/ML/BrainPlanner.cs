@@ -104,6 +104,9 @@ public static class BrainPlanner
             riskWarning = selected != null
                 ? BuildRiskWarning(game, selected.action)
                 : "Risk: unknown.",
+            riskLevel = selected != null
+                ? RiskLevelForAction(game, selected.action)
+                : "blocked",
             actionRanking = orderedRankings,
             imaginedFutures = futures
                 .OrderByDescending(future => future.score)
@@ -262,6 +265,9 @@ public static class BrainPlanner
             riskWarning = selectedScore != null
                 ? BuildRiskWarning(game, selectedScore.action)
                 : "Risk: unknown.",
+            riskLevel = selectedScore != null
+                ? RiskLevelForAction(game, selectedScore.action)
+                : "blocked",
             actionRanking = ordered,
             imaginedFutures = futures
                 .OrderByDescending(f => f.score)
@@ -493,20 +499,46 @@ public static class BrainPlanner
         return $"{prefix} to {target}: {path}";
     }
 
-    private static string BuildRiskWarning(GameManager game, int action)
+    public static string RiskLevelForAction(GameManager game, int action)
     {
         int objectCode = GetFirstStepObjectCode(game, action);
         switch (objectCode)
         {
             case 1:
-                return "Risk: low. The exit is directly reachable on the first step.";
-            case 2:
-                return "Risk: high. The first step runs into an enemy and is penalized.";
-            case 3:
-                return "Risk: medium. The first step spends time on an obstacle.";
             case 4:
-                return "Risk: low. The first step collects food and preserves the route.";
+            case 0:
+                return "low";
+            case 2:
+                return "high";
+            case 3:
+                return "medium";
             default:
+                return "blocked";
+        }
+    }
+
+    private static string BuildRiskWarning(GameManager game, int action)
+    {
+        switch (RiskLevelForAction(game, action))
+        {
+            case "blocked":
+                return "Risk: blocked. The first step is outside the board or not passable.";
+            case "high":
+                return "Risk: high. The first step runs into an enemy and is penalized.";
+            case "medium":
+                return "Risk: medium. The first step spends time on an obstacle.";
+            default:
+                int objectCode = GetFirstStepObjectCode(game, action);
+                if (objectCode == 1)
+                {
+                    return "Risk: low. The exit is directly reachable on the first step.";
+                }
+
+                if (objectCode == 4)
+                {
+                    return "Risk: low. The first step collects food and preserves the route.";
+                }
+
                 return "Risk: low. The first step is clear.";
         }
     }

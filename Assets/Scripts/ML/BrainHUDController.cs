@@ -14,6 +14,7 @@ public class BrainHUDController : MonoBehaviour
     private Label m_MetricsLabel;
     private VisualElement m_CoachOverlay;
     private Label m_CoachModeBadge;
+    private Label m_CoachInstructionLabel;
     private Label m_CoachSuggestionLabel;
     private Label m_CoachComplianceLabel;
     private Label m_CoachRiskLabel;
@@ -81,6 +82,7 @@ public class BrainHUDController : MonoBehaviour
         m_MetricsLabel = m_Root.Q<Label>("BrainMetricsLabel");
         m_CoachOverlay = m_Root.Q<VisualElement>("CoachOverlay");
         m_CoachModeBadge = m_Root.Q<Label>("CoachModeBadge");
+        m_CoachInstructionLabel = m_Root.Q<Label>("CoachInstructionLabel");
         m_CoachSuggestionLabel = m_Root.Q<Label>("CoachSuggestionLabel");
         m_CoachComplianceLabel = m_Root.Q<Label>("CoachComplianceLabel");
         m_CoachRiskLabel = m_Root.Q<Label>("CoachRiskLabel");
@@ -94,6 +96,7 @@ public class BrainHUDController : MonoBehaviour
             && m_MetricsLabel != null
             && m_CoachOverlay != null
             && m_CoachModeBadge != null
+            && m_CoachInstructionLabel != null
             && m_CoachSuggestionLabel != null
             && m_CoachComplianceLabel != null
             && m_CoachRiskLabel != null
@@ -244,10 +247,14 @@ public class BrainHUDController : MonoBehaviour
         }
 
         m_CoachModeBadge.text = "AI COACH";
+        m_CoachInstructionLabel.text = "M: HUMAN → COACH → AI";
         m_CoachSuggestionLabel.text = $"AI suggests: {data.suggestedActionName.ToUpperInvariant()}";
+        m_CoachSuggestionLabel.style.color = new Color(0.55f, 1f, 0.45f, 1f);
+        m_CoachSuggestionLabel.style.fontSize = 13;
         m_CoachComplianceLabel.text =
             $"Following AI: {data.sessionFollowedSteps}/{data.sessionTotalSteps} ({data.complianceRate:P0})";
         m_CoachRiskLabel.text = data.riskWarning;
+        m_CoachRiskLabel.style.color = RiskColor(data.riskLevel);
     }
 
     private static string BuildModeLabel(BrainHUDData data)
@@ -260,5 +267,18 @@ public class BrainHUDController : MonoBehaviour
         };
 
         return $"{mode} | {data.modeLabel}";
+    }
+
+    private static Color RiskColor(string riskLevel)
+    {
+        switch (riskLevel)
+        {
+            case "low":
+                return new Color(0.45f, 1f, 0.48f, 1f);
+            case "medium":
+                return new Color(1f, 0.88f, 0.32f, 1f);
+            default:
+                return new Color(1f, 0.36f, 0.36f, 1f);
+        }
     }
 }

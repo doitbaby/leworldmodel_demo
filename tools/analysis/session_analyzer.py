@@ -19,15 +19,25 @@ def analyze_sessions(input_dir: str, output: str) -> None:
 
     episode_steps: dict[tuple[str, int], list[dict]] = defaultdict(list)
     episode_end_rows: dict[tuple[str, int], dict] = {}
+    malformed_lines = 0
 
     for path in sorted(input_path.glob("session_*.jsonl")):
         with path.open("r", encoding="utf-8") as handle:
-            for line in handle:
+            for line_number, line in enumerate(handle, start=1):
                 if not line.strip():
                     continue
 
-                row = json.loads(line)
-                key = (str(row.get("session", path.stem)), int(row.get("episode", 0)))
+                try:
+                    row = json.loads(line)
+                    key = (
+                        str(row.get("session", path.stem)),
+                        int(row.get("episode", 0)),
+                    )
+                except (json.JSONDecodeError, TypeError, ValueError) as exc:
+                    malformed_lines += 1
+                    print(f"Warning: skipped malformed line {path}:{line_number}: {exc}")
+                    continue
+
                 if row.get("type") == "episode_end":
                     episode_end_rows[key] = row
                 else:
@@ -51,13 +61,14 @@ def analyze_sessions(input_dir: str, output: str) -> None:
         total_steps = len(steps)
         followed_steps = sum(1 for row in steps if row.get("followed"))
         compliance = (followed_steps / total_steps) if total_steps else 0.0
+        died = parse_bool(end_row.get("died", False))
 
         rows.append(
             {
                 "session": key[0],
                 "episode": key[1],
                 "levels_cleared": int(end_row.get("levels_cleared", 0)),
-                "died": bool(end_row.get("died", False)),
+                "died": died,
                 "food_remaining": int(end_row.get("food_remaining", 0)),
                 "total_steps": total_steps,
                 "followed_steps": followed_steps,
@@ -70,14 +81,55 @@ def analyze_sessions(input_dir: str, output: str) -> None:
         writer.writeheader()
         writer.writerows(rows)
 
+    print(f"Output CSV: {output_path}")
     print(f"Wrote {len(rows)} episode rows to {output_path}")
-    if not rows:
-        return
+    print(f"Episodes analyzed: {len(rows)}")
+    if malformed_lines:
+        print(f"Malformed JSONL lines skipped: {malformed_lines}")
 
-    avg_compliance = sum(row["compliance_rate"] for row in rows) / len(rows)
-    avg_levels = sum(row["levels_cleared"] for row in rows) / len(rows)
+    row_count = len(rows)
+    avg_compliance = (
+        sum(row["compliance_rate"] for row in rows) / row_count if row_count else 0.0
+    )
+    avg_levels = (
+        sum(row["levels_cleared"] for row in rows) / row_count if row_count else 0.0
+    )
+    avg_food = (
+        sum(row["food_remaining"] for row in rows) / row_count if row_count else 0.0
+    )
+    death_rate = sum(1 for row in rows if row["died"]) / row_count if row_count else 0.0
+    high_compliance = [row for row in rows if row["compliance_rate"] >= 0.75]
+    low_compliance = [row for row in rows if row["compliance_rate"] < 0.75]
+
+    print(f"Avg food remaining: {avg_food:.2f}")
+    print(f"Death rate: {death_rate:.1%}")
     print(f"Avg compliance: {avg_compliance:.1%}")
     print(f"Avg levels cleared: {avg_levels:.2f}")
+    print(format_compliance_split("High compliance >= 0.75", high_compliance))
+    print(format_compliance_split("Low compliance < 0.75", low_compliance))
+
+
+def parse_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes"}
+    return bool(value)
+
+
+def format_compliance_split(label: str, rows: list[dict]) -> str:
+    if not rows:
+        return f"{label}: 0 episodes"
+
+    avg_food = sum(row["food_remaining"] for row in rows) / len(rows)
+    death_rate = sum(1 for row in rows if row["died"]) / len(rows)
+    avg_levels = sum(row["levels_cleared"] for row in rows) / len(rows)
+    return (
+        f"{label}: {len(rows)} episodes | "
+        f"avg food {avg_food:.2f} | "
+        f"death rate {death_rate:.1%} | "
+        f"avg levels {avg_levels:.2f}"
+    )
 
 
 def main() -> None:
