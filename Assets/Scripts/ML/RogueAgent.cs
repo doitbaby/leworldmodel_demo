@@ -62,6 +62,9 @@ public class RogueAgent : Agent
 
         int action = actions.DiscreteActions[0];
         var previousObservation = RogueObservationBuilder.Build(Game);
+        int previousBoardWidth = PixelObservationBuilder.GetBoardWidth(Game);
+        int previousBoardHeight = PixelObservationBuilder.GetBoardHeight(Game);
+        int[] previousBoardState = PixelObservationBuilder.BuildCellCodes(Game);
         int previousLevel = Game.CurrentLevel;
         int previousFood = Game.CurrentFoodAmount;
         int previousDistance = Game.DistanceToExit(Game.PlayerCellPosition);
@@ -117,7 +120,11 @@ public class RogueAgent : Agent
                 done,
                 Game.CurrentLevel,
                 Game.CurrentFoodAmount,
-                outcome);
+                outcome,
+                previousBoardWidth,
+                previousBoardHeight,
+                previousBoardState,
+                PixelObservationBuilder.BuildCellCodes(Game));
         }
 
         if (done)
@@ -157,7 +164,7 @@ public class RogueAgent : Agent
         {
             Game = GameManager.Instance != null
                 ? GameManager.Instance
-                : FindFirstObjectByType<GameManager>();
+                : FindAnyObjectByType<GameManager>();
         }
 
         if (TransitionRecorder == null)

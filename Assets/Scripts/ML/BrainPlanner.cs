@@ -36,7 +36,7 @@ public static class BrainPlanner
         int planningHorizon,
         float discount,
         float heuristicBlend,
-        bool aiEnabled)
+        AgentMode agentMode)
     {
         planningHorizon = Mathf.Clamp(planningHorizon, 1, 5);
         discount = Mathf.Clamp01(discount);
@@ -92,12 +92,18 @@ public static class BrainPlanner
         return new BrainHUDData
         {
             modelLoaded = modelLoaded,
-            aiEnabled = aiEnabled,
+            aiEnabled = agentMode != AgentMode.HumanOnly,
+            agentMode = agentMode,
             modeLabel = modelLoaded ? "WORLD MODEL + MISSION" : "MISSION FALLBACK",
             selectedAction = selected != null ? selected.actionName.ToUpperInvariant() : "NONE",
             explanation = selected != null
                 ? BuildSelectionExplanation(selected, missionTarget, modelLoaded)
                 : "No valid action was found.",
+            suggestedActionIndex = selected != null ? selected.action : -1,
+            suggestedActionName = selected != null ? selected.actionName : "none",
+            riskWarning = selected != null
+                ? BuildRiskWarning(game, selected.action)
+                : "Risk: unknown.",
             actionRanking = orderedRankings,
             imaginedFutures = futures
                 .OrderByDescending(future => future.score)
@@ -127,7 +133,7 @@ public static class BrainPlanner
         GameManager game,
         SidecarPlanSummary plan,
         BrainMetrics metrics,
-        bool aiEnabled)
+        AgentMode agentMode)
     {
         if (plan == null
             || plan.BestActions == null
@@ -137,7 +143,7 @@ public static class BrainPlanner
         {
             // No usable plan; defer to the mission-heuristic path so the
             // HUD still has something to display.
-            return Decide(game, null, metrics, 3, 0.85f, 0f, aiEnabled);
+            return Decide(game, null, metrics, 3, 0.85f, 0f, agentMode);
         }
 
         var rankings = new BrainActionScore[RogueObservationBuilder.ActionCount];
@@ -242,7 +248,8 @@ public static class BrainPlanner
         return new BrainHUDData
         {
             modelLoaded = true,
-            aiEnabled = aiEnabled,
+            aiEnabled = agentMode != AgentMode.HumanOnly,
+            agentMode = agentMode,
             modeLabel = label,
             selectedAction = selectedScore != null
                 ? selectedScore.actionName.ToUpperInvariant()
@@ -250,6 +257,11 @@ public static class BrainPlanner
             explanation = selectedScore != null
                 ? $"Choose {selectedScore.actionName.ToUpperInvariant()} because {selectedScore.reason}."
                 : "No valid action was found in the sidecar plan.",
+            suggestedActionIndex = selectedScore != null ? selectedScore.action : -1,
+            suggestedActionName = selectedScore != null ? selectedScore.actionName : "none",
+            riskWarning = selectedScore != null
+                ? BuildRiskWarning(game, selectedScore.action)
+                : "Risk: unknown.",
             actionRanking = ordered,
             imaginedFutures = futures
                 .OrderByDescending(f => f.score)
@@ -479,6 +491,24 @@ public static class BrainPlanner
         string path = string.Join(" -> ", actions.Select(RogueObservationBuilder.ActionName));
         string target = missionTarget != null ? missionTarget.label : "exit";
         return $"{prefix} to {target}: {path}";
+    }
+
+    private static string BuildRiskWarning(GameManager game, int action)
+    {
+        int objectCode = GetFirstStepObjectCode(game, action);
+        switch (objectCode)
+        {
+            case 1:
+                return "Risk: low. The exit is directly reachable on the first step.";
+            case 2:
+                return "Risk: high. The first step runs into an enemy and is penalized.";
+            case 3:
+                return "Risk: medium. The first step spends time on an obstacle.";
+            case 4:
+                return "Risk: low. The first step collects food and preserves the route.";
+            default:
+                return "Risk: low. The first step is clear.";
+        }
     }
 
     private static MissionTarget ChooseMissionTarget(GameManager game)

@@ -7,7 +7,7 @@ This project implements the Unity demo path from the research report:
 3. record transitions from the PPO/random agent,
 4. train a small next-state/reward predictor,
 5. run a live Unity planner that scores candidate actions with the exported predictor,
-6. show an AI Brain HUD with action ranking, imagined futures, learning metrics, and explanation text.
+6. show an AI Coach HUD with action ranking, imagined futures, learning metrics, compliance, risk warning, and explanation text.
 
 ## Tooling
 
@@ -39,7 +39,7 @@ This creates:
 
 The generated training scene adds `RogueAgent`, `RogueTransitionRecorder`, `Behavior Parameters`, and `Decision Requester` to `PlayerCharacter`.
 
-The planner scene starts in human-control mode. Press the `AI OFF` button in the top-right corner, or press `M`, to toggle world-model control on. Press it again to return to manual play. After game over, click `NEW RUN` or press `R` to restart without leaving Play mode.
+The planner scene starts in `HUMAN` mode. Press the top-right mode button, or press `M`, to cycle `HUMAN -> COACH -> AI -> HUMAN`. After game over, click `NEW RUN` or press `R` to restart without leaving Play mode.
 
 The left-side `AI BRAIN HUD` is the presentation cockpit:
 
@@ -47,6 +47,7 @@ The left-side `AI BRAIN HUD` is the presentation cockpit:
 - `Imagined Futures` shows the top short rollouts, usually 3 steps.
 - `metrics` shows the last exported dynamics loss, reward loss, transition count, and success proxy.
 - The explanation label states why the selected action won.
+- In `COACH` mode the panel also shows the suggested move, compliance tracker, and first-step risk warning.
 
 ## PPO Baseline
 
@@ -81,7 +82,7 @@ Each row contains:
 - `next_obs`: 31-float next observation vector,
 - `done`: episode terminal flag.
 
-`WorldModelPlannerRoom` also records AI-planner transitions while `AI ON` is active, so useful demo runs can become training data for the next offline retrain.
+`WorldModelPlannerRoom` records planner transitions in both `COACH` and `AI` modes, and `COACH` mode also writes separate coach-session JSONL analytics for compliance review.
 
 ## Train Predictor
 
@@ -130,11 +131,12 @@ This means the agent is trying to reach the exit with fewer turns, preserve food
 
 Demo flow:
 
-1. Start the scene and move manually with WASD or arrow keys.
-2. Click `AI OFF` or press `M`.
-3. The button changes to `AI ON` and the player is controlled by the world-model planner.
-4. Click the button or press `M` again to resume manual control.
-5. If the run ends, click `NEW RUN` or press `R`.
+1. Start the scene and move manually with WASD or arrow keys in `HUMAN`.
+2. Click the mode button or press `M` once to enter `COACH`.
+3. Keep playing manually while the HUD recommends moves, ranks alternatives, and updates compliance.
+4. Click the mode button or press `M` again to enter `AI` autonomous mode.
+5. Press `M` once more to return to `HUMAN`.
+6. If the run ends, click `NEW RUN` or press `R`.
 
 The current shipped demo weights were trained from generated Rogue-like transitions as a stable fallback. To make the demo stronger, record real Unity transitions in `TrainingRoom.unity`, then retrain with `--input`.
 
@@ -172,5 +174,5 @@ LeWorldModel is the research inspiration. This Unity implementation is LeWorldMo
 Short talk track:
 
 ```text
-This is LeWorldModel-lite. The original LeWorldModel learns a pixel-based latent world model. This demo keeps the same model-based idea but uses vector observations for live stability. On every AI step, the agent ranks all four actions, imagines short futures, and chooses the action with the highest predicted future reward. The Brain HUD exposes that internal loop so we can see why the agent chose this direction instead of another one.
+This is LeWorldModel-lite. The original LeWorldModel learns a pixel-based latent world model. This demo keeps the same model-based idea but uses vector observations for live stability. In Coach Mode the player still moves, while the model ranks all four actions, imagines short futures, warns about immediate risk, and explains which move it would choose. The Brain HUD exposes that internal loop so we can see why one direction is recommended over another.
 ```

@@ -5,9 +5,17 @@ public class BrainHUDData
 {
     public bool modelLoaded;
     public bool aiEnabled;
+    public AgentMode agentMode;
     public string modeLabel;
     public string selectedAction;
     public string explanation;
+    public bool isCoachMode;
+    public int suggestedActionIndex;
+    public string suggestedActionName;
+    public float complianceRate;
+    public int sessionFollowedSteps;
+    public int sessionTotalSteps;
+    public string riskWarning;
     public BrainActionScore[] actionRanking;
     public BrainFuture[] imaginedFutures;
     public BrainMetrics metrics;

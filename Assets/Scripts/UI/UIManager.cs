@@ -60,15 +60,36 @@ public class UIManager
 
     public void SetWorldModelStatus(bool modelControlEnabled, bool modelLoaded)
     {
+        SetAgentModeStatus(
+            modelControlEnabled ? AgentMode.AIAutonomous : AgentMode.HumanOnly,
+            modelLoaded,
+            false);
+    }
+
+    public void SetAgentModeStatus(AgentMode mode, bool modelLoaded, bool sidecarOnline)
+    {
         if (m_ModelToggleButton == null || m_ModelStatusLabel == null)
         {
             return;
         }
 
-        m_ModelToggleButton.text = modelControlEnabled ? "AI ON" : "AI OFF";
-        m_ModelStatusLabel.text = modelControlEnabled
-            ? (modelLoaded ? "WORLD MODEL" : "HEURISTIC AI")
-            : "PLAYER";
+        m_ModelToggleButton.text = mode switch
+        {
+            AgentMode.CoachMode => "COACH",
+            AgentMode.AIAutonomous => "AI",
+            _ => "HUMAN",
+        };
+
+        m_ModelStatusLabel.text = mode switch
+        {
+            AgentMode.CoachMode => sidecarOnline
+                ? "COACH+SIDECAR"
+                : (modelLoaded ? "COACH+MODEL" : "COACH+HEUR"),
+            AgentMode.AIAutonomous => sidecarOnline
+                ? "SIDECAR AI"
+                : (modelLoaded ? "WORLD MODEL" : "HEURISTIC AI"),
+            _ => "PLAYER",
+        };
     }
 
     public void ShowGameOverPanel(int level)

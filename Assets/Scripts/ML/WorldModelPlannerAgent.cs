@@ -50,12 +50,25 @@ public class WorldModelPlannerAgent : MonoBehaviour
 
     private WorldModelWeights m_Model;
     private BrainMetrics m_Metrics = BrainMetrics.Empty();
+    private AgentMode m_AgentMode = AgentMode.HumanOnly;
+    private CoachSessionLogger m_CoachLogger;
     private float m_NextDecisionTime;
-    private bool m_IsModelControlEnabled;
     private bool m_UiBound;
+    private bool m_GameEventsBound;
+    private bool m_PlayerEventsBound;
+    private bool m_RunInitialized;
     private PendingTransition m_PendingTransition;
+    private GameManager.RunEndedEvent m_PendingRunEndedEvent;
+    private PlayerController m_BoundPlayerController;
 
-    // ---- sidecar state (M5) ----
+    private BrainHUDData m_CachedCoachFrame;
+    private float[] m_CachedCoachScores;
+    private Vector2Int m_CachedCoachCell;
+    private int m_CachedCoachLevel;
+    private int m_CachedCoachFood;
+
+    private int m_SidecarRequestVersion;
+
     private bool m_SidecarClientReady;
     private bool m_SidecarOnline;
     private bool m_SidecarInfoLoaded;
@@ -67,6 +80,7 @@ public class WorldModelPlannerAgent : MonoBehaviour
     private void Start()
     {
         EnsureReferences();
+        EnsureCoachLogger();
         LoadModel();
         LoadMetrics();
 
@@ -77,15 +91,9 @@ public class WorldModelPlannerAgent : MonoBehaviour
         }
 
         Game.EnsureInitialized();
+        BindGameEvents();
+        BindPlayerEvents();
         BindUi();
-
-        if (StartNewGameOnStart)
-        {
-            Game.StartNewGame();
-            TransitionRecorder?.BeginEpisode();
-        }
-
-        SetModelControl(StartWithModelEnabled || DisableHumanInput);
 
         if (UseSidecar)
         {
@@ -93,18 +101,35 @@ public class WorldModelPlannerAgent : MonoBehaviour
             m_NextHealthProbe = Time.time;
         }
 
-        PublishBrainFrame();
+        SetAgentMode(StartWithModelEnabled || DisableHumanInput
+            ? AgentMode.AIAutonomous
+            : AgentMode.HumanOnly);
+
+        if (StartNewGameOnStart && Game.CurrentLevel == 0 && !Game.IsGameOver)
+        {
+            Game.StartNewGame();
+        }
+        else if (!m_RunInitialized && Game.CurrentLevel > 0 && !Game.IsGameOver)
+        {
+            HandleRunStarted();
+        }
+
+        PublishForCurrentMode();
     }
 
     private void Update()
     {
         EnsureReferences();
+        EnsureCoachLogger();
+        BindGameEvents();
+        BindPlayerEvents();
         BindUi();
         HandleToggleInput();
 
         if (Game != null && Game.PlayerController != null && !Game.PlayerController.IsMoving)
         {
             FlushPendingTransition();
+            FinalizePendingRunEndedIfReady();
         }
 
         if (UseSidecar)
@@ -113,60 +138,54 @@ public class WorldModelPlannerAgent : MonoBehaviour
             MaybeProbeSidecar();
         }
 
-        if (!m_IsModelControlEnabled)
+        switch (m_AgentMode)
         {
-            return;
+            case AgentMode.CoachMode:
+                UpdateCoachMode();
+                break;
+            case AgentMode.AIAutonomous:
+                UpdateAutonomousMode();
+                break;
+            default:
+                break;
         }
+    }
 
-        if (Game == null || Game.IsGameOver || Game.PlayerController.IsMoving)
-        {
-            return;
-        }
-
-        if (Time.time < m_NextDecisionTime)
-        {
-            return;
-        }
-
-        // Sidecar path: fire one async /plan_actions request and apply
-        // the first action of the returned best plan in the callback.
-        // The decision-interval bump happens inside the callback so we
-        // do NOT race-fire while a request is in flight.
-        if (UseSidecar
-            && m_SidecarClientReady
-            && m_SidecarOnline
-            && m_SidecarInfoLoaded
-            && !m_SidecarRequestInFlight)
-        {
-            TryStepViaSidecar();
-            return;
-        }
-
-        // Fallback path (mission-heuristic BrainPlanner, unchanged
-        // behavior). This runs when the user has not enabled sidecar
-        // control or the sidecar is unreachable / mid-recovery.
-        m_NextDecisionTime = Time.time + DecisionIntervalSeconds;
-        DecideAndStepViaBrainPlanner();
+    private void OnDestroy()
+    {
+        UnbindGameEvents();
+        UnbindPlayerEvents();
     }
 
     public void ToggleModelControl()
     {
-        SetModelControl(!m_IsModelControlEnabled);
+        SetAgentMode(NextMode(m_AgentMode));
     }
 
     public void SetModelControl(bool enabled)
     {
-        m_IsModelControlEnabled = enabled;
+        SetAgentMode(enabled ? AgentMode.AIAutonomous : AgentMode.HumanOnly);
+    }
+
+    public int ChooseAction()
+    {
+        return SelectedAction(BuildLocalBrainFrame(m_AgentMode));
+    }
+
+    private void SetAgentMode(AgentMode mode)
+    {
+        if (m_AgentMode == mode)
+        {
+            UpdateUi();
+            return;
+        }
+
+        m_AgentMode = mode;
+        InvalidateSidecarRequests();
 
         if (Game != null && Game.PlayerController != null)
         {
-            if (m_IsModelControlEnabled && Game.IsGameOver)
-            {
-                Game.StartNewGame();
-                TransitionRecorder?.BeginEpisode();
-            }
-
-            bool humanControlEnabled = !m_IsModelControlEnabled;
+            bool humanControlEnabled = mode != AgentMode.AIAutonomous;
             Game.PlayerController.EnableHumanInput = humanControlEnabled;
 
             if (Game.IsGameOver)
@@ -185,51 +204,198 @@ public class WorldModelPlannerAgent : MonoBehaviour
 
         m_NextDecisionTime = Time.time;
         UpdateUi();
-        PublishBrainFrame();
+        PublishForCurrentMode();
     }
 
-    public int ChooseAction()
+    private void UpdateCoachMode()
     {
-        return SelectedAction(BuildBrainFrame());
+        if (Game == null || Game.IsGameOver || Game.PlayerController == null || Game.PlayerController.IsMoving)
+        {
+            return;
+        }
+
+        if (Time.time < m_NextDecisionTime)
+        {
+            return;
+        }
+
+        if (UseSidecar
+            && m_SidecarClientReady
+            && m_SidecarOnline
+            && m_SidecarInfoLoaded
+            && !m_SidecarRequestInFlight)
+        {
+            RequestCoachSidecarSuggestion();
+            return;
+        }
+
+        m_NextDecisionTime = Time.time + DecisionIntervalSeconds;
+        UpdateCoachFrame(BuildLocalBrainFrame(AgentMode.CoachMode));
     }
 
-    private BrainHUDData BuildBrainFrame()
+    private void UpdateAutonomousMode()
     {
-        EnsureReferences();
-        return BrainPlanner.Decide(
+        if (Game == null || Game.IsGameOver || Game.PlayerController == null || Game.PlayerController.IsMoving)
+        {
+            return;
+        }
+
+        if (Time.time < m_NextDecisionTime)
+        {
+            return;
+        }
+
+        if (UseSidecar
+            && m_SidecarClientReady
+            && m_SidecarOnline
+            && m_SidecarInfoLoaded
+            && !m_SidecarRequestInFlight)
+        {
+            RequestAutonomousSidecarStep();
+            return;
+        }
+
+        m_NextDecisionTime = Time.time + DecisionIntervalSeconds;
+        DecideAndStepViaBrainPlanner();
+    }
+
+    private void PublishForCurrentMode()
+    {
+        if (BrainHUD == null)
+        {
+            return;
+        }
+
+        if (m_AgentMode == AgentMode.HumanOnly)
+        {
+            BrainHUD.UpdateBrain(BuildHumanOnlyFrame());
+            return;
+        }
+
+        if (m_AgentMode == AgentMode.CoachMode)
+        {
+            UpdateCoachFrame(GetCoachFrameForCurrentState());
+            return;
+        }
+
+        BrainHUD.UpdateBrain(BuildLocalBrainFrame(AgentMode.AIAutonomous));
+    }
+
+    private BrainHUDData BuildHumanOnlyFrame()
+    {
+        return new BrainHUDData
+        {
+            aiEnabled = false,
+            agentMode = AgentMode.HumanOnly,
+            isCoachMode = false,
+            modelLoaded = m_Model != null && m_Model.IsLoaded,
+            modeLabel = "PLAYER CONTROL",
+            selectedAction = "NONE",
+            suggestedActionIndex = -1,
+            suggestedActionName = "none",
+            explanation = "Human-only mode active.",
+            riskWarning = string.Empty,
+            metrics = m_Metrics ?? BrainMetrics.Empty(),
+        };
+    }
+
+    private BrainHUDData BuildLocalBrainFrame(AgentMode agentMode)
+    {
+        return DecorateBrainFrame(BrainPlanner.Decide(
             Game,
             m_Model,
             m_Metrics,
             PlanningHorizon,
             RolloutDiscount,
             HeuristicBlend,
-            m_IsModelControlEnabled);
+            agentMode));
     }
 
-    private void PublishBrainFrame()
+    private BrainHUDData BuildSidecarBrainFrame(BrainPlanner.SidecarPlanSummary summary, AgentMode agentMode)
     {
-        if (BrainHUD != null && Game != null && !Game.IsGameOver)
-        {
-            BrainHUD.UpdateBrain(BuildBrainFrame());
-        }
+        return DecorateBrainFrame(BrainPlanner.DecideWithSidecarPlan(
+            Game,
+            summary,
+            m_Metrics,
+            agentMode));
     }
 
-    private static int SelectedAction(BrainHUDData brainFrame)
+    private BrainHUDData DecorateBrainFrame(BrainHUDData frame)
     {
-        if (brainFrame == null || brainFrame.actionRanking == null || brainFrame.actionRanking.Length == 0)
+        if (frame == null)
         {
-            return 0;
+            return BuildHumanOnlyFrame();
         }
 
-        for (int i = 0; i < brainFrame.actionRanking.Length; i++)
+        frame.agentMode = m_AgentMode;
+        frame.aiEnabled = m_AgentMode != AgentMode.HumanOnly;
+        frame.isCoachMode = m_AgentMode == AgentMode.CoachMode;
+        frame.suggestedActionIndex = SelectedAction(frame);
+        frame.suggestedActionName = frame.suggestedActionIndex >= 0
+            ? RogueObservationBuilder.ActionName(frame.suggestedActionIndex)
+            : "none";
+        frame.complianceRate = m_CoachLogger != null ? m_CoachLogger.complianceRate : 0f;
+        frame.sessionFollowedSteps = m_CoachLogger != null ? m_CoachLogger.followedSteps : 0;
+        frame.sessionTotalSteps = m_CoachLogger != null ? m_CoachLogger.totalSteps : 0;
+        frame.riskWarning = string.IsNullOrWhiteSpace(frame.riskWarning)
+            ? "Risk: waiting for suggestion."
+            : frame.riskWarning;
+        return frame;
+    }
+
+    private BrainHUDData GetCoachFrameForCurrentState()
+    {
+        if (IsCachedCoachFrameCurrent() && m_CachedCoachFrame != null)
         {
-            if (brainFrame.actionRanking[i].selected)
+            return m_CachedCoachFrame;
+        }
+
+        return BuildLocalBrainFrame(AgentMode.CoachMode);
+    }
+
+    private bool IsCachedCoachFrameCurrent()
+    {
+        return m_CachedCoachFrame != null
+            && Game != null
+            && Game.PlayerCellPosition == m_CachedCoachCell
+            && Game.CurrentLevel == m_CachedCoachLevel
+            && Game.CurrentFoodAmount == m_CachedCoachFood;
+    }
+
+    private void UpdateCoachFrame(BrainHUDData frame)
+    {
+        if (frame == null || Game == null)
+        {
+            return;
+        }
+
+        m_CachedCoachFrame = frame;
+        m_CachedCoachScores = ExtractActionScores(frame);
+        m_CachedCoachCell = Game.PlayerCellPosition;
+        m_CachedCoachLevel = Game.CurrentLevel;
+        m_CachedCoachFood = Game.CurrentFoodAmount;
+        BrainHUD?.UpdateBrain(frame);
+    }
+
+    private static float[] ExtractActionScores(BrainHUDData frame)
+    {
+        var scores = new float[RogueObservationBuilder.ActionCount];
+        if (frame == null || frame.actionRanking == null)
+        {
+            return scores;
+        }
+
+        foreach (var score in frame.actionRanking)
+        {
+            if (score == null || score.action < 0 || score.action >= scores.Length)
             {
-                return brainFrame.actionRanking[i].action;
+                continue;
             }
+
+            scores[score.action] = score.rolloutScore;
         }
 
-        return brainFrame.actionRanking[0].action;
+        return scores;
     }
 
     private void HandleToggleInput()
@@ -322,7 +488,10 @@ public class WorldModelPlannerAgent : MonoBehaviour
     {
         if (Game != null && Game.UIManager != null)
         {
-            Game.UIManager.SetWorldModelStatus(m_IsModelControlEnabled, m_Model != null && m_Model.IsLoaded);
+            Game.UIManager.SetAgentModeStatus(
+                m_AgentMode,
+                m_Model != null && m_Model.IsLoaded,
+                UseSidecar && m_SidecarOnline);
         }
     }
 
@@ -351,7 +520,6 @@ public class WorldModelPlannerAgent : MonoBehaviour
             {
                 TransitionRecorder = FindAnyObjectByType<RogueTransitionRecorder>();
             }
-
             if (TransitionRecorder == null && RecordPlannerTransitions)
             {
                 TransitionRecorder = gameObject.AddComponent<RogueTransitionRecorder>();
@@ -359,9 +527,144 @@ public class WorldModelPlannerAgent : MonoBehaviour
         }
     }
 
-    // ------------------------------------------------------------------
-    // Sidecar wiring (M5)
-    // ------------------------------------------------------------------
+    private void EnsureCoachLogger()
+    {
+        if (m_CoachLogger == null)
+        {
+            m_CoachLogger = GetComponent<CoachSessionLogger>();
+            if (m_CoachLogger == null)
+            {
+                m_CoachLogger = gameObject.AddComponent<CoachSessionLogger>();
+            }
+        }
+    }
+
+    private void BindGameEvents()
+    {
+        if (m_GameEventsBound || Game == null)
+        {
+            return;
+        }
+
+        Game.RunStarted += OnRunStarted;
+        Game.RunEnded += OnRunEnded;
+        m_GameEventsBound = true;
+    }
+
+    private void UnbindGameEvents()
+    {
+        if (!m_GameEventsBound || Game == null)
+        {
+            return;
+        }
+
+        Game.RunStarted -= OnRunStarted;
+        Game.RunEnded -= OnRunEnded;
+        m_GameEventsBound = false;
+    }
+
+    private void BindPlayerEvents()
+    {
+        if (Game == null || Game.PlayerController == null)
+        {
+            return;
+        }
+
+        if (m_PlayerEventsBound && ReferenceEquals(m_BoundPlayerController, Game.PlayerController))
+        {
+            return;
+        }
+
+        UnbindPlayerEvents();
+        m_BoundPlayerController = Game.PlayerController;
+        m_BoundPlayerController.HumanActionStarted += OnHumanActionStarted;
+        m_BoundPlayerController.HumanActionFinished += OnHumanActionFinished;
+        m_PlayerEventsBound = true;
+    }
+
+    private void UnbindPlayerEvents()
+    {
+        if (!m_PlayerEventsBound || m_BoundPlayerController == null)
+        {
+            return;
+        }
+
+        m_BoundPlayerController.HumanActionStarted -= OnHumanActionStarted;
+        m_BoundPlayerController.HumanActionFinished -= OnHumanActionFinished;
+        m_BoundPlayerController = null;
+        m_PlayerEventsBound = false;
+    }
+
+    private void OnRunStarted()
+    {
+        HandleRunStarted();
+    }
+
+    private void HandleRunStarted()
+    {
+        m_RunInitialized = true;
+        m_PendingRunEndedEvent = null;
+        m_PendingTransition = null;
+        InvalidateSidecarRequests();
+        TransitionRecorder?.BeginEpisode();
+        m_CoachLogger?.NewSession();
+        m_CoachLogger?.NewEpisode();
+        m_NextDecisionTime = Time.time;
+        PublishForCurrentMode();
+    }
+
+    private void OnRunEnded(GameManager.RunEndedEvent runEndedEvent)
+    {
+        m_PendingRunEndedEvent = runEndedEvent;
+        FinalizePendingRunEndedIfReady();
+    }
+
+    private void FinalizePendingRunEndedIfReady()
+    {
+        if (m_PendingRunEndedEvent == null || m_PendingTransition != null)
+        {
+            return;
+        }
+
+        m_CoachLogger?.LogEpisodeEnd(
+            m_PendingRunEndedEvent.LevelsCleared,
+            m_PendingRunEndedEvent.Died,
+            m_PendingRunEndedEvent.FoodRemaining);
+        m_PendingRunEndedEvent = null;
+    }
+
+    private void OnHumanActionStarted(PlayerController.HumanActionEvent actionEvent)
+    {
+        if (m_AgentMode != AgentMode.CoachMode || Game == null || Game.IsGameOver)
+        {
+            return;
+        }
+
+        var frame = GetCoachFrameForCurrentState();
+        var scores = ExtractActionScores(frame);
+        var snapshot = SnapshotPreStep();
+        snapshot.action = actionEvent.ActionIndex;
+        snapshot.mode = AgentMode.CoachMode;
+        snapshot.suggestedAction = SelectedAction(frame);
+        snapshot.actionScores = scores;
+        snapshot.logCoachAnalytics = true;
+        m_PendingTransition = snapshot;
+        UpdateCoachFrame(frame);
+    }
+
+    private void OnHumanActionFinished(PlayerController.HumanActionEvent actionEvent)
+    {
+        if (m_AgentMode != AgentMode.CoachMode || m_PendingTransition == null)
+        {
+            return;
+        }
+
+        m_PendingTransition.accepted = actionEvent.Accepted;
+        if (!actionEvent.Accepted)
+        {
+            FlushPendingTransition();
+        }
+    }
 
     private void EnsureSidecarClient()
     {
@@ -416,6 +719,7 @@ public class WorldModelPlannerAgent : MonoBehaviour
         {
             m_SidecarOnline = false;
             m_SidecarInfoLoaded = false;
+            UpdateUi();
             return;
         }
 
@@ -430,33 +734,68 @@ public class WorldModelPlannerAgent : MonoBehaviour
                 $"Sidecar reports action_dim={m_SidecarActionDim} but Unity ActionCount={RogueObservationBuilder.ActionCount}. " +
                 "Plans may not map cleanly; falling back to mission planner if requests fail.");
         }
+
+        UpdateUi();
     }
 
     private void OnSidecarProbeFailed(string err)
     {
         if (m_SidecarOnline)
         {
-            // Only log the transition from online -> offline; further
-            // failures stay silent so the console does not spam every
-            // probe interval while the sidecar is down.
             Debug.LogWarning($"Sidecar /info probe failed: {err}. Falling back to mission planner.");
         }
+
         m_SidecarOnline = false;
         m_SidecarInfoLoaded = false;
+        UpdateUi();
     }
 
-    private void TryStepViaSidecar()
+    private void RequestCoachSidecarSuggestion()
     {
+        if (Game == null || Game.IsGameOver || Game.PlayerController == null || Game.PlayerController.IsMoving)
+        {
+            return;
+        }
+
         m_SidecarRequestInFlight = true;
-
-        // Snapshot pre-step state. The game state cannot mutate between
-        // here and the callback because we already gated on
-        // ``Game.PlayerController.IsMoving == false`` and the agent
-        // owns input (human input disabled while m_IsModelControlEnabled).
         var snapshot = SnapshotPreStep();
-
+        var context = CreateSidecarRequestContext(AgentMode.CoachMode, null);
         int requestHorizon = Mathf.Clamp(PlanningHorizon, 1, Mathf.Max(1, m_SidecarMaxHorizon));
-        var request = new LewmClient.PlanRequest
+        var request = BuildSidecarRequest(requestHorizon, snapshot);
+
+        StartCoroutine(SidecarClient.PlanActions(
+            request,
+            response => OnCoachPlanReceived(response, context),
+            err => OnCoachPlanFailed(err, context)));
+    }
+
+    private void RequestAutonomousSidecarStep()
+    {
+        if (Game == null || Game.IsGameOver || Game.PlayerController == null || Game.PlayerController.IsMoving)
+        {
+            return;
+        }
+
+        m_SidecarRequestInFlight = true;
+        var snapshot = SnapshotPreStep();
+        var context = CreateSidecarRequestContext(AgentMode.AIAutonomous, snapshot);
+        int requestHorizon = Mathf.Clamp(PlanningHorizon, 1, Mathf.Max(1, m_SidecarMaxHorizon));
+        var request = BuildSidecarRequest(requestHorizon, snapshot);
+
+        StartCoroutine(SidecarClient.PlanActions(
+            request,
+            response => OnAutonomousPlanReceived(response, context),
+            err => OnAutonomousPlanFailed(err, context)));
+    }
+
+    private LewmClient.PlanRequest BuildSidecarRequest(int requestHorizon, PendingTransition snapshot)
+    {
+        if (snapshot == null)
+        {
+            snapshot = SnapshotPreStep();
+        }
+
+        return new LewmClient.PlanRequest
         {
             board_width = snapshot.previousBoardWidth,
             board_height = snapshot.previousBoardHeight,
@@ -468,11 +807,129 @@ public class WorldModelPlannerAgent : MonoBehaviour
             done_penalty = 1.0f,
             seed = SidecarSeed,
         };
+    }
 
-        StartCoroutine(SidecarClient.PlanActions(
-            request,
-            plan => OnSidecarPlanReceived(plan, snapshot),
-            err => OnSidecarPlanFailed(err, snapshot)));
+    private SidecarRequestContext CreateSidecarRequestContext(AgentMode mode, PendingTransition snapshot)
+    {
+        return new SidecarRequestContext
+        {
+            Version = ++m_SidecarRequestVersion,
+            Mode = mode,
+            PlayerCell = Game.PlayerCellPosition,
+            Level = Game.CurrentLevel,
+            Food = Game.CurrentFoodAmount,
+            Snapshot = snapshot,
+        };
+    }
+
+    private bool IsStaleSidecarContext(SidecarRequestContext context)
+    {
+        return Game == null
+            || context == null
+            || context.Version != m_SidecarRequestVersion
+            || context.Mode != m_AgentMode
+            || Game.IsGameOver
+            || Game.CurrentLevel != context.Level
+            || Game.CurrentFoodAmount != context.Food
+            || Game.PlayerCellPosition != context.PlayerCell;
+    }
+
+    private void OnCoachPlanReceived(LewmClient.PlanResponse response, SidecarRequestContext context)
+    {
+        m_SidecarRequestInFlight = false;
+        if (IsStaleSidecarContext(context))
+        {
+            return;
+        }
+
+        m_NextDecisionTime = Time.time + DecisionIntervalSeconds;
+        var summary = BrainPlanner.SidecarPlanSummary.FromPlanResponse(response);
+        if (summary == null)
+        {
+            Debug.LogWarning("Sidecar /plan_actions returned malformed plan; falling back to mission planner.");
+            m_SidecarOnline = false;
+            UpdateCoachFrame(BuildLocalBrainFrame(AgentMode.CoachMode));
+            UpdateUi();
+            return;
+        }
+
+        UpdateCoachFrame(BuildSidecarBrainFrame(summary, AgentMode.CoachMode));
+    }
+
+    private void OnCoachPlanFailed(string err, SidecarRequestContext context)
+    {
+        m_SidecarRequestInFlight = false;
+        m_SidecarOnline = false;
+        m_NextHealthProbe = Time.time + 0.5f;
+        if (IsStaleSidecarContext(context))
+        {
+            UpdateUi();
+            return;
+        }
+
+        Debug.LogWarning($"Sidecar /plan_actions failed: {err}. Falling back to mission planner for coach suggestion.");
+        m_NextDecisionTime = Time.time + DecisionIntervalSeconds;
+        UpdateCoachFrame(BuildLocalBrainFrame(AgentMode.CoachMode));
+        UpdateUi();
+    }
+
+    private void OnAutonomousPlanReceived(LewmClient.PlanResponse response, SidecarRequestContext context)
+    {
+        m_SidecarRequestInFlight = false;
+        if (IsStaleSidecarContext(context))
+        {
+            return;
+        }
+
+        m_NextDecisionTime = Time.time + DecisionIntervalSeconds;
+        var summary = BrainPlanner.SidecarPlanSummary.FromPlanResponse(response);
+        if (summary == null)
+        {
+            Debug.LogWarning("Sidecar /plan_actions returned malformed plan; falling back to mission planner.");
+            m_SidecarOnline = false;
+            FallbackAutonomousStep(context);
+            UpdateUi();
+            return;
+        }
+
+        var brainFrame = BuildSidecarBrainFrame(summary, AgentMode.AIAutonomous);
+        BrainHUD?.UpdateBrain(brainFrame);
+        StepWithAction(SelectedAction(brainFrame), context.Snapshot);
+    }
+
+    private void OnAutonomousPlanFailed(string err, SidecarRequestContext context)
+    {
+        m_SidecarRequestInFlight = false;
+        m_SidecarOnline = false;
+        m_NextHealthProbe = Time.time + 0.5f;
+        if (IsStaleSidecarContext(context))
+        {
+            UpdateUi();
+            return;
+        }
+
+        m_NextDecisionTime = Time.time + DecisionIntervalSeconds;
+        Debug.LogWarning($"Sidecar /plan_actions failed: {err}. Falling back to mission planner for this step.");
+        FallbackAutonomousStep(context);
+        UpdateUi();
+    }
+
+    private void FallbackAutonomousStep(SidecarRequestContext context)
+    {
+        if (IsStaleSidecarContext(context))
+        {
+            return;
+        }
+
+        var brainFrame = BuildLocalBrainFrame(AgentMode.AIAutonomous);
+        BrainHUD?.UpdateBrain(brainFrame);
+        StepWithAction(SelectedAction(brainFrame), context.Snapshot);
+    }
+
+    private void InvalidateSidecarRequests()
+    {
+        m_SidecarRequestVersion++;
+        m_SidecarRequestInFlight = false;
     }
 
     private PendingTransition SnapshotPreStep()
@@ -489,68 +946,13 @@ public class WorldModelPlannerAgent : MonoBehaviour
         };
     }
 
-    private void OnSidecarPlanReceived(LewmClient.PlanResponse response, PendingTransition snapshot)
-    {
-        m_SidecarRequestInFlight = false;
-        m_NextDecisionTime = Time.time + DecisionIntervalSeconds;
-
-        // Stale-check: user may have toggled off, the level may have
-        // restarted, or the player may have started moving via some
-        // other code path while the HTTP round-trip was in flight.
-        if (!m_IsModelControlEnabled
-            || Game == null
-            || Game.IsGameOver
-            || Game.PlayerController.IsMoving)
-        {
-            return;
-        }
-
-        var summary = BrainPlanner.SidecarPlanSummary.FromPlanResponse(response);
-        if (summary == null)
-        {
-            Debug.LogWarning("Sidecar /plan_actions returned malformed plan; falling back to mission planner.");
-            m_SidecarOnline = false;
-            FallbackStepAfterSidecarFailure(snapshot);
-            return;
-        }
-
-        var brainFrame = BrainPlanner.DecideWithSidecarPlan(
-            Game,
-            summary,
-            m_Metrics,
-            m_IsModelControlEnabled);
-        BrainHUD?.UpdateBrain(brainFrame);
-
-        StepWithAction(SelectedAction(brainFrame), snapshot);
-    }
-
-    private void OnSidecarPlanFailed(string err, PendingTransition snapshot)
-    {
-        m_SidecarRequestInFlight = false;
-        m_SidecarOnline = false;
-        m_NextHealthProbe = Time.time + 0.5f;  // re-probe sooner after a failure
-        m_NextDecisionTime = Time.time + DecisionIntervalSeconds;
-        Debug.LogWarning($"Sidecar /plan_actions failed: {err}. Falling back to mission planner for this step.");
-        FallbackStepAfterSidecarFailure(snapshot);
-    }
-
-    private void FallbackStepAfterSidecarFailure(PendingTransition snapshot)
-    {
-        if (!m_IsModelControlEnabled
-            || Game == null
-            || Game.IsGameOver
-            || Game.PlayerController.IsMoving)
-        {
-            return;
-        }
-
-        var brainFrame = BuildBrainFrame();
-        BrainHUD?.UpdateBrain(brainFrame);
-        StepWithAction(SelectedAction(brainFrame), snapshot);
-    }
-
     private void StepWithAction(int action, PendingTransition snapshot)
     {
+        if (Game == null || Game.PlayerController == null || action < 0)
+        {
+            return;
+        }
+
         bool accepted = Game.PlayerController.TryStep(
             RogueObservationBuilder.ActionToDirection(action),
             smoothMovement: !InstantActions);
@@ -559,6 +961,7 @@ public class WorldModelPlannerAgent : MonoBehaviour
         {
             snapshot.action = action;
             snapshot.accepted = accepted;
+            snapshot.mode = AgentMode.AIAutonomous;
             m_PendingTransition = snapshot;
             if (!accepted || InstantActions)
             {
@@ -567,22 +970,17 @@ public class WorldModelPlannerAgent : MonoBehaviour
         }
     }
 
-    // ------------------------------------------------------------------
-    // BrainPlanner (mission heuristic) path
-    // ------------------------------------------------------------------
-
     private void DecideAndStepViaBrainPlanner()
     {
-        var brainFrame = BuildBrainFrame();
+        var brainFrame = BuildLocalBrainFrame(AgentMode.AIAutonomous);
         BrainHUD?.UpdateBrain(brainFrame);
-        int action = SelectedAction(brainFrame);
         var snapshot = SnapshotPreStep();
-        StepWithAction(action, snapshot);
+        StepWithAction(SelectedAction(brainFrame), snapshot);
     }
 
     private void FlushPendingTransition()
     {
-        if (m_PendingTransition == null || TransitionRecorder == null || Game == null)
+        if (m_PendingTransition == null || Game == null)
         {
             return;
         }
@@ -612,20 +1010,81 @@ public class WorldModelPlannerAgent : MonoBehaviour
             outcome = "game_over";
         }
 
-        TransitionRecorder.Record(
-            m_PendingTransition.observation,
-            m_PendingTransition.action,
-            reward,
-            RogueObservationBuilder.Build(Game),
-            done,
-            Game.CurrentLevel,
-            Game.CurrentFoodAmount,
-            outcome,
-            m_PendingTransition.previousBoardWidth,
-            m_PendingTransition.previousBoardHeight,
-            m_PendingTransition.previousBoardState,
-            PixelObservationBuilder.BuildCellCodes(Game));
+        if (TransitionRecorder != null)
+        {
+            TransitionRecorder.Record(
+                m_PendingTransition.observation,
+                m_PendingTransition.action,
+                reward,
+                RogueObservationBuilder.Build(Game),
+                done,
+                Game.CurrentLevel,
+                Game.CurrentFoodAmount,
+                outcome,
+                m_PendingTransition.previousBoardWidth,
+                m_PendingTransition.previousBoardHeight,
+                m_PendingTransition.previousBoardState,
+                PixelObservationBuilder.BuildCellCodes(Game));
+        }
+
+        if (m_PendingTransition.logCoachAnalytics)
+        {
+            m_CoachLogger?.LogStep(
+                m_PendingTransition.suggestedAction,
+                m_PendingTransition.action,
+                m_PendingTransition.actionScores,
+                reward,
+                Game.CurrentFoodAmount,
+                Game.CurrentLevel);
+        }
+
         m_PendingTransition = null;
+
+        if (m_AgentMode == AgentMode.CoachMode && !Game.IsGameOver)
+        {
+            m_NextDecisionTime = Time.time;
+            UpdateCoachFrame(BuildLocalBrainFrame(AgentMode.CoachMode));
+        }
+    }
+
+    private static int SelectedAction(BrainHUDData brainFrame)
+    {
+        if (brainFrame == null || brainFrame.actionRanking == null || brainFrame.actionRanking.Length == 0)
+        {
+            return -1;
+        }
+
+        for (int i = 0; i < brainFrame.actionRanking.Length; i++)
+        {
+            if (brainFrame.actionRanking[i].selected)
+            {
+                return brainFrame.actionRanking[i].action;
+            }
+        }
+
+        return brainFrame.actionRanking[0].action;
+    }
+
+    private static AgentMode NextMode(AgentMode mode)
+    {
+        return mode switch
+        {
+            AgentMode.HumanOnly => AgentMode.CoachMode,
+            AgentMode.CoachMode => AgentMode.AIAutonomous,
+            _ => AgentMode.HumanOnly,
+        };
+    }
+
+    private static float[] CopyScores(float[] scores)
+    {
+        if (scores == null)
+        {
+            return null;
+        }
+
+        var copy = new float[scores.Length];
+        Array.Copy(scores, copy, scores.Length);
+        return copy;
     }
 
     private class PendingTransition
@@ -639,5 +1098,19 @@ public class WorldModelPlannerAgent : MonoBehaviour
         public int previousBoardWidth;
         public int previousBoardHeight;
         public int[] previousBoardState;
+        public AgentMode mode;
+        public int suggestedAction = -1;
+        public float[] actionScores;
+        public bool logCoachAnalytics;
+    }
+
+    private class SidecarRequestContext
+    {
+        public int Version;
+        public AgentMode Mode;
+        public Vector2Int PlayerCell;
+        public int Level;
+        public int Food;
+        public PendingTransition Snapshot;
     }
 }
