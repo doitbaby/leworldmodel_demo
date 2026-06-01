@@ -3,6 +3,14 @@ using UnityEngine.InputSystem;
 
 public class PlayerController : MonoBehaviour
 {
+    public class HumanActionEvent
+    {
+        public int ActionIndex;
+        public Vector2Int Direction;
+        public Vector2Int FromCell;
+        public bool Accepted;
+    }
+
     private BoardManager m_Board;
     public Vector2Int CellPosition { get; set; }
     public bool IsMoving => m_IsMoving;
@@ -19,6 +27,9 @@ public class PlayerController : MonoBehaviour
     private Animator m_Animator;
     private int Animator_Moving = Animator.StringToHash("Moving");
     private int Animator_Attack = Animator.StringToHash("Attack");
+
+    public event System.Action<HumanActionEvent> HumanActionStarted;
+    public event System.Action<HumanActionEvent> HumanActionFinished;
 
     void Awake()
     {
@@ -56,7 +67,24 @@ public class PlayerController : MonoBehaviour
         if (EnableHumanInput && MoveAction.triggered)
         {
             Vector2 move = MoveAction.ReadValue<Vector2>();
-            TryStep(Vector2Int.RoundToInt(move));
+            Vector2Int direction = Vector2Int.RoundToInt(move);
+            int actionIndex = RogueObservationBuilder.DirectionToAction(direction);
+            if (actionIndex < 0)
+            {
+                return;
+            }
+
+            direction = RogueObservationBuilder.ActionToDirection(actionIndex);
+            var actionEvent = new HumanActionEvent
+            {
+                ActionIndex = actionIndex,
+                Direction = direction,
+                FromCell = CellPosition,
+            };
+
+            HumanActionStarted?.Invoke(actionEvent);
+            actionEvent.Accepted = TryStep(direction);
+            HumanActionFinished?.Invoke(actionEvent);
         }
     }
 

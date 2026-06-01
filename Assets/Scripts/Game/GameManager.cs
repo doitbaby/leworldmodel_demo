@@ -4,6 +4,13 @@ using UnityEngine.UIElements;
 
 public class GameManager : MonoBehaviour
 {
+    public class RunEndedEvent
+    {
+        public int LevelsCleared;
+        public bool Died;
+        public int FoodRemaining;
+    }
+
     private int m_CurrentLevel = 0;
     private bool m_IsInitialized;
 
@@ -20,6 +27,8 @@ public class GameManager : MonoBehaviour
     public int CurrentFoodAmount => m_CurrentFoodAmount;
 
     public TickManager TickManager { get; private set; }
+    public event System.Action RunStarted;
+    public event System.Action<RunEndedEvent> RunEnded;
 
     public int FoodAmount = 100;
     private int m_CurrentFoodAmount;
@@ -42,7 +51,10 @@ public class GameManager : MonoBehaviour
     void Start()
     {
         EnsureInitialized();
-        StartNewGame();
+        if (m_CurrentLevel == 0 && !IsGameOver)
+        {
+            StartNewGame();
+        }
     }
 
     // Update is called once per frame
@@ -65,6 +77,7 @@ public class GameManager : MonoBehaviour
         UIManager?.HideGameOverPanel();
         NewLevel();
         UIManager?.UpdateFood(FoodAmount);
+        RunStarted?.Invoke();
     }
 
     public void NewLevel()
@@ -94,12 +107,25 @@ public class GameManager : MonoBehaviour
 
     public void GameOver()
     {
+        if (IsGameOver)
+        {
+            return;
+        }
+
         IsGameOver = true;
         SetPlayerInputEnabled(false);
         if (PlayerController.EnableHumanInput)
         {
             PlayerController.StartNewGameAction.Enable();
         }
+
+        RunEnded?.Invoke(new RunEndedEvent
+        {
+            LevelsCleared = Mathf.Max(0, m_CurrentLevel),
+            Died = true,
+            FoodRemaining = m_CurrentFoodAmount,
+        });
+
         UIManager?.ShowGameOverPanel(m_CurrentLevel);
     }
 

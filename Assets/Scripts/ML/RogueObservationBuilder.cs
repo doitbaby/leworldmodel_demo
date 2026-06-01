@@ -103,6 +103,22 @@ public static class RogueObservationBuilder
         return Directions[action];
     }
 
+    public static int DirectionToAction(Vector2Int direction)
+    {
+        direction.x = Mathf.Clamp(direction.x, -1, 1);
+        direction.y = Mathf.Clamp(direction.y, -1, 1);
+
+        for (int i = 0; i < Directions.Length; i++)
+        {
+            if (Directions[i] == direction)
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
     public static string ActionName(int action)
     {
         switch (Mathf.Clamp(action, 0, Directions.Length - 1))

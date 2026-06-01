@@ -22,7 +22,7 @@ Unity game state
 -> short-horizon dynamics/reward prediction
 -> mission-aware planning
 -> action ranking
--> AI Brain HUD explanation
+-> AI coach suggestion + HUD explanation
 ```
 
 The agent is not only a hard-coded bot. It combines:
@@ -45,7 +45,7 @@ It is:
 
 - a Unity 2D roguelike AI research cockpit,
 - a vector-observation world-model prototype,
-- a live demo with AI on/off toggle,
+- a live demo with Human / Coach / AI mode cycling,
 - a trajectory collection and offline training pipeline,
 - an explainable action-ranking interface.
 
@@ -62,15 +62,15 @@ project focuses on a practical, stable version that can be shown live.
 ## Core Features
 
 - Unity 2D roguelike environment with procedural levels.
-- Toggle between human control and AI control with `M` or the `AI OFF/AI ON`
-  button.
+- Cycle `HUMAN -> COACH -> AI` with `M` or the top-right mode button.
 - AI Brain HUD showing:
-  - best action,
+  - suggested action,
   - action ranking,
   - predicted reward and future score,
   - imagined futures,
   - dynamics loss, reward loss, success proxy, and transition count,
-  - plain-language explanation for the chosen action.
+  - plain-language explanation for the chosen action,
+  - coach compliance and first-step risk warning in Coach Mode.
 - Mission-aware planner that tries to:
   - reach the exit,
   - minimize wasted steps,
@@ -124,8 +124,8 @@ flowchart LR
 - `RogueTransitionRecorder`
   - Records `obs, action, reward, next_obs, done` rows as JSONL.
 - `WorldModelPlannerAgent`
-  - Toggles AI control, loads model weights/metrics, records planner
-    transitions, and executes selected actions.
+  - Cycles Human / Coach / AI modes, loads model weights/metrics, records
+    planner transitions, and publishes coach suggestions.
 - `BrainPlanner`
   - Scores actions using mission planning, safety costs, heuristic rollout, and
     learned model predictions.
@@ -199,15 +199,17 @@ Assets/Scenes/WorldModelPlannerRoom.unity
 
 3. Press Play.
 4. Use manual movement first if desired.
-5. Press `M` or click `AI OFF` to enable AI control.
+5. Press `M` or click the top-right mode button to cycle into `COACH`.
 6. Watch the AI Brain HUD:
-   - selected action,
+   - suggested action,
    - ranked alternatives,
    - imagined futures,
    - learning metrics,
-   - explanation.
-7. Press `M` again to return to manual control.
-8. Click `NEW RUN` or press `R` after game over.
+   - explanation,
+   - compliance and risk warning.
+7. Press `M` again to cycle into `AI` autonomous mode.
+8. Press `M` a third time to return to `HUMAN`.
+9. Click `NEW RUN` or press `R` after game over.
 
 For readability in the Unity Game tab, use `Scale = 1x` or enable
 `Maximize On Play`.

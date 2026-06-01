@@ -12,6 +12,11 @@ public class BrainHUDController : MonoBehaviour
     private Label m_SelectedActionLabel;
     private Label m_ExplanationLabel;
     private Label m_MetricsLabel;
+    private VisualElement m_CoachOverlay;
+    private Label m_CoachModeBadge;
+    private Label m_CoachSuggestionLabel;
+    private Label m_CoachComplianceLabel;
+    private Label m_CoachRiskLabel;
     private VisualElement m_RankingList;
     private VisualElement m_FuturesList;
     private bool m_IsBound;
@@ -30,14 +35,23 @@ public class BrainHUDController : MonoBehaviour
             return;
         }
 
-        m_ModeLabel.text = data.aiEnabled
-            ? $"{data.modeLabel} ACTIVE"
-            : $"{data.modeLabel} READY";
-        m_SelectedActionLabel.text = $"BEST ACTION: {data.selectedAction}";
+        bool hidePanel = data.agentMode == AgentMode.HumanOnly;
+        m_Panel.style.display = hidePanel ? DisplayStyle.None : DisplayStyle.Flex;
+        if (hidePanel)
+        {
+            HideCoachOverlay();
+            return;
+        }
+
+        m_ModeLabel.text = BuildModeLabel(data);
+        m_SelectedActionLabel.text = data.isCoachMode
+            ? $"AI SUGGESTS: {data.selectedAction}"
+            : $"BEST ACTION: {data.selectedAction}";
         m_ExplanationLabel.text = data.explanation;
         UpdateMetrics(data.metrics);
         UpdateRanking(data.actionRanking);
         UpdateFutures(data.imaginedFutures);
+        UpdateCoachOverlay(data);
     }
 
     private void Bind()
@@ -65,6 +79,11 @@ public class BrainHUDController : MonoBehaviour
         m_SelectedActionLabel = m_Root.Q<Label>("BrainSelectedActionLabel");
         m_ExplanationLabel = m_Root.Q<Label>("BrainExplanationLabel");
         m_MetricsLabel = m_Root.Q<Label>("BrainMetricsLabel");
+        m_CoachOverlay = m_Root.Q<VisualElement>("CoachOverlay");
+        m_CoachModeBadge = m_Root.Q<Label>("CoachModeBadge");
+        m_CoachSuggestionLabel = m_Root.Q<Label>("CoachSuggestionLabel");
+        m_CoachComplianceLabel = m_Root.Q<Label>("CoachComplianceLabel");
+        m_CoachRiskLabel = m_Root.Q<Label>("CoachRiskLabel");
         m_RankingList = m_Root.Q<VisualElement>("BrainRankingList");
         m_FuturesList = m_Root.Q<VisualElement>("BrainFuturesList");
 
@@ -73,6 +92,11 @@ public class BrainHUDController : MonoBehaviour
             && m_SelectedActionLabel != null
             && m_ExplanationLabel != null
             && m_MetricsLabel != null
+            && m_CoachOverlay != null
+            && m_CoachModeBadge != null
+            && m_CoachSuggestionLabel != null
+            && m_CoachComplianceLabel != null
+            && m_CoachRiskLabel != null
             && m_RankingList != null
             && m_FuturesList != null;
     }
@@ -90,6 +114,7 @@ public class BrainHUDController : MonoBehaviour
         m_MetricsLabel.text = "metrics: waiting for model";
         m_RankingList.Clear();
         m_FuturesList.Clear();
+        HideCoachOverlay();
     }
 
     private void UpdateMetrics(BrainMetrics metrics)
@@ -192,5 +217,48 @@ public class BrainHUDController : MonoBehaviour
             ? new Color(0.12f, 0.35f, 0.18f, 0.88f)
             : new Color(0f, 0f, 0f, 0.35f);
         parent.Add(label);
+    }
+
+    public void HideCoachOverlay()
+    {
+        if (m_CoachOverlay != null)
+        {
+            m_CoachOverlay.style.display = DisplayStyle.None;
+        }
+    }
+
+    private void UpdateCoachOverlay(BrainHUDData data)
+    {
+        if (m_CoachOverlay == null)
+        {
+            return;
+        }
+
+        m_CoachOverlay.style.display = data.isCoachMode
+            ? DisplayStyle.Flex
+            : DisplayStyle.None;
+
+        if (!data.isCoachMode)
+        {
+            return;
+        }
+
+        m_CoachModeBadge.text = "AI COACH";
+        m_CoachSuggestionLabel.text = $"AI suggests: {data.suggestedActionName.ToUpperInvariant()}";
+        m_CoachComplianceLabel.text =
+            $"Following AI: {data.sessionFollowedSteps}/{data.sessionTotalSteps} ({data.complianceRate:P0})";
+        m_CoachRiskLabel.text = data.riskWarning;
+    }
+
+    private static string BuildModeLabel(BrainHUDData data)
+    {
+        string mode = data.agentMode switch
+        {
+            AgentMode.CoachMode => "COACH MODE",
+            AgentMode.AIAutonomous => "AI AUTO",
+            _ => "PLAYER CONTROL",
+        };
+
+        return $"{mode} | {data.modeLabel}";
     }
 }
