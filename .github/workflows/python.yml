@@ -73,21 +73,23 @@ jobs:
           ok = compileall.compile_dir(str(root), force=True, quiet=1)
           sys.exit(0 if ok else 1)
           PY
-      - name: smoke 1/8 -- tools.lewm.train --smoke
+      - name: smoke 1/9 -- tools.lewm.train --smoke
         run: python -m tools.lewm.train --smoke
-      - name: smoke 2/8 -- tools.lewm.tests.test_board_jsonl
+      - name: smoke 2/9 -- tools.lewm.tests.test_board_jsonl
         run: python -m tools.lewm.tests.test_board_jsonl
-      - name: smoke 3/8 -- tools.lewm.tests.test_sidecar
+      - name: smoke 3/9 -- tools.lewm.tests.test_sidecar
         run: python -m tools.lewm.tests.test_sidecar
-      - name: smoke 4/8 -- tools.lewm.tests.test_training_pipeline
+      - name: smoke 4/9 -- tools.lewm.tests.test_training_pipeline
         run: python -m tools.lewm.tests.test_training_pipeline
-      - name: smoke 5/8 -- tools.lewm.tests.test_planner
+      - name: smoke 5/9 -- tools.lewm.tests.test_planner
         run: python -m tools.lewm.tests.test_planner
-      - name: smoke 6/8 -- tools.lewm.tests.test_env
+      - name: smoke 6/9 -- tools.lewm.tests.test_env
         run: python -m tools.lewm.tests.test_env
-      - name: smoke 7/8 -- tools.lewm.tests.test_benchmark
+      - name: smoke 7/9 -- tools.lewm.tests.test_benchmark
         run: python -m tools.lewm.tests.test_benchmark
-      - name: smoke 8/8 -- tools/world_model/train_world_model.py --smoke
+      - name: smoke 8/9 -- tools.lewm.tests.test_generate_jsonl_v3
+        run: python -m tools.lewm.tests.test_generate_jsonl_v3
+      - name: smoke 9/9 -- tools/world_model/train_world_model.py --smoke
         run: python tools/world_model/train_world_model.py --smoke --epochs 2
 
   benchmark-smoke:
