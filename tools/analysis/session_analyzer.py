@@ -88,15 +88,9 @@ def analyze_sessions(input_dir: str, output: str) -> None:
         print(f"Malformed JSONL lines skipped: {malformed_lines}")
 
     row_count = len(rows)
-    avg_compliance = (
-        sum(row["compliance_rate"] for row in rows) / row_count if row_count else 0.0
-    )
-    avg_levels = (
-        sum(row["levels_cleared"] for row in rows) / row_count if row_count else 0.0
-    )
-    avg_food = (
-        sum(row["food_remaining"] for row in rows) / row_count if row_count else 0.0
-    )
+    avg_compliance = sum(row["compliance_rate"] for row in rows) / row_count if row_count else 0.0
+    avg_levels = sum(row["levels_cleared"] for row in rows) / row_count if row_count else 0.0
+    avg_food = sum(row["food_remaining"] for row in rows) / row_count if row_count else 0.0
     death_rate = sum(1 for row in rows if row["died"]) / row_count if row_count else 0.0
     high_compliance = [row for row in rows if row["compliance_rate"] >= 0.75]
     low_compliance = [row for row in rows if row["compliance_rate"] < 0.75]
