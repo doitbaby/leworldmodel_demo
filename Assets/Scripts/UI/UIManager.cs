@@ -15,6 +15,8 @@ public class UIManager
 
     private VisualElement m_GameOverPanel;
     private Label m_GameOverMessage;
+    private VisualElement m_DemoSummaryPanel;
+    private Label m_DemoSummaryLabel;
 
     public void UpdateLevel(int level) => m_LevelLabel.text = $" - LEVEL {level} -";
 
@@ -94,7 +96,21 @@ public class UIManager
 
     public void ShowGameOverPanel(int level)
     {
+        ShowGameOverPanel(level, null, null);
+    }
+
+    public void ShowGameOverPanel(
+        int level,
+        DemoRunSummary current,
+        DemoRunSummary previousHumanOnly)
+    {
         m_GameOverMessage.text = $"GAME OVER!\n\nYou traveled through {level} levels";
+        if (m_DemoSummaryPanel != null && m_DemoSummaryLabel != null)
+        {
+            m_DemoSummaryPanel.style.display = DisplayStyle.Flex;
+            m_DemoSummaryLabel.text = BuildDemoSummary(current, previousHumanOnly);
+        }
+
         m_GameOverPanel.style.visibility = Visibility.Visible;
     }
 
@@ -110,7 +126,55 @@ public class UIManager
         m_ModelToggleButton = UIDoc.rootVisualElement.Q<Button>("ModelToggleButton");
         m_GameOverPanel = UIDoc.rootVisualElement.Q<VisualElement>("GameOverPanel");
         m_GameOverMessage = m_GameOverPanel.Q<Label>("GameOverMessage");
+        m_DemoSummaryPanel = UIDoc.rootVisualElement.Q<VisualElement>("DemoSummaryPanel");
+        m_DemoSummaryLabel = UIDoc.rootVisualElement.Q<Label>("DemoSummaryLabel");
         m_RestartButton = UIDoc.rootVisualElement.Q<Button>("RestartButton");
         HideGameOverPanel();
+    }
+
+    private static string BuildDemoSummary(
+        DemoRunSummary current,
+        DemoRunSummary previousHumanOnly)
+    {
+        if (current == null)
+        {
+            return "Demo summary unavailable.";
+        }
+
+        string summary =
+            $"RUN SUMMARY\n" +
+            $"Mode: {current.ModeLabel}\n" +
+            $"Seed: {current.activeSeed}\n" +
+            $"Level reached: {current.levelReached}\n" +
+            $"Food remaining: {current.foodRemaining}\n" +
+            $"Action attempts: {current.totalActionAttempts}\n" +
+            $"Invalid moves: {current.invalidMoves}\n" +
+            $"Risky moves: {current.riskyMoves}";
+
+        if (current.totalCoachSteps > 0)
+        {
+            summary +=
+                $"\nCompliance: {current.followedAiCount}/{current.totalCoachSteps} " +
+                $"({current.complianceRate:P0})";
+        }
+
+        if (!current.mixedMode
+            && current.mode == AgentMode.CoachMode
+            && previousHumanOnly != null
+            && !previousHumanOnly.mixedMode)
+        {
+            summary +=
+                "\n\nVS PREVIOUS HUMAN\n" +
+                $"Level: {FormatDelta(current.levelReached - previousHumanOnly.levelReached)}\n" +
+                $"Food: {FormatDelta(current.foodRemaining - previousHumanOnly.foodRemaining)}\n" +
+                $"Steps: {FormatDelta(current.totalActionAttempts - previousHumanOnly.totalActionAttempts)}";
+        }
+
+        return summary;
+    }
+
+    private static string FormatDelta(int value)
+    {
+        return value >= 0 ? $"+{value}" : value.ToString();
     }
 }

@@ -13,6 +13,10 @@ public class GameManager : MonoBehaviour
 
     private int m_CurrentLevel = 0;
     private bool m_IsInitialized;
+    private bool m_PlayerEventsBound;
+    private bool m_DemoRunBaselineStored;
+    private int m_DemoRunIndex;
+    private AgentMode m_CurrentAgentMode = AgentMode.HumanOnly;
 
     public static GameManager Instance { get; private set; }
 
@@ -21,10 +25,15 @@ public class GameManager : MonoBehaviour
     public PlayerController PlayerController;
     public UIDocument UIDoc;
     public Key RestartKey = Key.R;
+    public bool UseFixedDemoSeed = true;
+    public int DemoSeed = 20260601;
+    public bool ReplaySameSeed = true;
 
     public Vector2Int PlayerCellPosition => PlayerController.CellPosition;
     public int CurrentLevel => m_CurrentLevel;
     public int CurrentFoodAmount => m_CurrentFoodAmount;
+    public DemoRunSummary CurrentRunSummary { get; private set; }
+    public DemoRunSummary PreviousHumanOnlySummary { get; private set; }
 
     public TickManager TickManager { get; private set; }
     public event System.Action RunStarted;
@@ -70,8 +79,10 @@ public class GameManager : MonoBehaviour
     {
         EnsureInitialized();
         IsGameOver = false;
+        m_DemoRunBaselineStored = false;
         m_CurrentLevel = 0;
         m_CurrentFoodAmount = FoodAmount;
+        BeginDemoRunSummary();
         PlayerController.Init();
         SetPlayerInputEnabled(PlayerController.EnableHumanInput);
         UIManager?.HideGameOverPanel();
@@ -119,6 +130,7 @@ public class GameManager : MonoBehaviour
             PlayerController.StartNewGameAction.Enable();
         }
 
+        FinalizeDemoRunSummary();
         RunEnded?.Invoke(new RunEndedEvent
         {
             LevelsCleared = Mathf.Max(0, m_CurrentLevel),
@@ -126,7 +138,7 @@ public class GameManager : MonoBehaviour
             FoodRemaining = m_CurrentFoodAmount,
         });
 
-        UIManager?.ShowGameOverPanel(m_CurrentLevel);
+        ShowDemoRunSummary(storeBaseline: false);
     }
 
     public void SetPlayerInputEnabled(bool enabled)
@@ -140,6 +152,135 @@ public class GameManager : MonoBehaviour
         {
             PlayerController.MoveAction.Disable();
             PlayerController.StartNewGameAction.Disable();
+        }
+    }
+
+    public void SetDemoRunMode(AgentMode mode)
+    {
+        if (CurrentRunSummary != null
+            && !IsGameOver
+            && CurrentRunSummary.mode != mode)
+        {
+            CurrentRunSummary.mixedMode = true;
+        }
+
+        if (CurrentRunSummary != null && !CurrentRunSummary.mixedMode)
+        {
+            CurrentRunSummary.mode = mode;
+        }
+
+        m_CurrentAgentMode = mode;
+    }
+
+    public void RecordDemoActionAttempt(
+        AgentMode mode,
+        bool accepted,
+        bool followedAi,
+        bool coachStep,
+        bool risky)
+    {
+        if (CurrentRunSummary == null)
+        {
+            return;
+        }
+
+        CurrentRunSummary.totalActionAttempts++;
+        if (!accepted)
+        {
+            CurrentRunSummary.invalidMoves++;
+        }
+
+        if (risky)
+        {
+            CurrentRunSummary.riskyMoves++;
+        }
+
+        if (coachStep)
+        {
+            CurrentRunSummary.totalCoachSteps++;
+            if (followedAi)
+            {
+                CurrentRunSummary.followedAiCount++;
+            }
+
+            CurrentRunSummary.complianceRate = CurrentRunSummary.totalCoachSteps > 0
+                ? (float)CurrentRunSummary.followedAiCount / CurrentRunSummary.totalCoachSteps
+                : 0f;
+        }
+
+        CurrentRunSummary.foodRemaining = m_CurrentFoodAmount;
+        CurrentRunSummary.levelReached = m_CurrentLevel;
+        if (IsGameOver)
+        {
+            ShowDemoRunSummary(storeBaseline: true);
+        }
+    }
+
+    private void OnHumanActionFinished(PlayerController.HumanActionEvent actionEvent)
+    {
+        if (m_CurrentAgentMode != AgentMode.HumanOnly)
+        {
+            return;
+        }
+
+        RecordDemoActionAttempt(
+            AgentMode.HumanOnly,
+            actionEvent.Accepted,
+            followedAi: false,
+            coachStep: false,
+            risky: false);
+    }
+
+    private void BeginDemoRunSummary()
+    {
+        int activeSeed = UseFixedDemoSeed
+            ? (ReplaySameSeed ? DemoSeed : DemoSeed + m_DemoRunIndex)
+            : 0;
+        m_DemoRunIndex++;
+
+        if (UseFixedDemoSeed)
+        {
+            Random.InitState(activeSeed);
+        }
+
+        CurrentRunSummary = new DemoRunSummary
+        {
+            mode = m_CurrentAgentMode,
+            activeSeed = activeSeed,
+            levelReached = 0,
+            foodRemaining = FoodAmount,
+        };
+    }
+
+    private void FinalizeDemoRunSummary()
+    {
+        if (CurrentRunSummary == null)
+        {
+            return;
+        }
+
+        CurrentRunSummary.levelReached = m_CurrentLevel;
+        CurrentRunSummary.foodRemaining = m_CurrentFoodAmount;
+        CurrentRunSummary.complianceRate = CurrentRunSummary.totalCoachSteps > 0
+            ? (float)CurrentRunSummary.followedAiCount / CurrentRunSummary.totalCoachSteps
+            : 0f;
+    }
+
+    private static bool IsPureHumanOnlyRun(DemoRunSummary summary)
+    {
+        return summary != null
+            && !summary.mixedMode
+            && summary.mode == AgentMode.HumanOnly;
+    }
+
+    private void ShowDemoRunSummary(bool storeBaseline)
+    {
+        var previousHumanOnly = PreviousHumanOnlySummary;
+        UIManager?.ShowGameOverPanel(m_CurrentLevel, CurrentRunSummary, previousHumanOnly);
+        if (storeBaseline && !m_DemoRunBaselineStored && IsPureHumanOnlyRun(CurrentRunSummary))
+        {
+            PreviousHumanOnlySummary = CurrentRunSummary.Clone();
+            m_DemoRunBaselineStored = true;
         }
     }
 
@@ -166,6 +307,20 @@ public class GameManager : MonoBehaviour
             UIManager.RegisterRestart(StartNewGame);
         }
 
+        if (PlayerController != null && !m_PlayerEventsBound)
+        {
+            PlayerController.HumanActionFinished += OnHumanActionFinished;
+            m_PlayerEventsBound = true;
+        }
+
         m_IsInitialized = true;
+    }
+
+    private void OnDestroy()
+    {
+        if (PlayerController != null && m_PlayerEventsBound)
+        {
+            PlayerController.HumanActionFinished -= OnHumanActionFinished;
+        }
     }
 }

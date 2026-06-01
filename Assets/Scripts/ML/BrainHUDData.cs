@@ -16,6 +16,7 @@ public class BrainHUDData
     public int sessionFollowedSteps;
     public int sessionTotalSteps;
     public string riskWarning;
+    public string riskLevel;
     public BrainActionScore[] actionRanking;
     public BrainFuture[] imaginedFutures;
     public BrainMetrics metrics;
